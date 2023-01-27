@@ -29,6 +29,7 @@ norns UI:
   - **K2**: add splice
   - **K1** + **K2**: remove splice
   
+  - **ENC3**: scrub playhead
   - **ENC3**: select active splice
   
   - **K1** + **ENC2**: move start marker of active splice
