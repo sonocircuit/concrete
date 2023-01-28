@@ -19,8 +19,8 @@ norns UI:
 - **K2**: change focus [playback / splices]
 
   ***playback:***
-  - **K2**: toggle playback
-  - **K1** + **K2**: toggle rec (under construction)
+  - **K2**: toggle playback / if rec on then rec off
+  - **K1** + **K2**: toggle rec --> rec modes under params > reel > recording
 
   - **ENC2**: rec level
   - **ENC3**: overdub level
