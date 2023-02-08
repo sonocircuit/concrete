@@ -2,7 +2,8 @@
 
 virtual tape explorations for norns. ***highly*** inspired by morphogene. not a clone.
 
-very *very* WIP here... subject to many changes... many features still not working yet.
+- recording levels / s.o.s still have some quirks... experimentation and testing needed
+- crow implementation untested
 
 ----
 ### quickstart
