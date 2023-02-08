@@ -36,7 +36,7 @@ local mu = require 'musicutil'
 local _lfos = require 'lfo'
 
 -------- variables --------
-local pset_load = true
+local pset_load = false
 local default_pset = 1
 
 local shift = false
