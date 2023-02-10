@@ -22,9 +22,7 @@
 -- TODO:
 -----------------------------------------------------------------------------------------------------------------------------
 -- review s.o.s levels, routing etc.
--- test crow
--- add splice select param
--- add random splice param
+-- review crow i/o
 -----------------------------------------------------------------------------------------------------------------------------
 
 local a = arc.connect()
@@ -79,6 +77,7 @@ local rec_voice = 6
 local rec_at_threshold = false
 local midi_channel = 1
 local midi_root = 60
+local crow_is = false
 
 -- variables for arc
 local arc_is = false
@@ -121,7 +120,7 @@ local oct2 = math.pow(2, 24/12) -- speed == 4
 -------- tables --------
 local options = {}
 options.scale = {"oct", "oct+p4", "oct+p5", "oct+p4+p5"}
-options.crow_input = {"none", "play [trig]", "play [gate]", "rec [trig]", "rec [gate]", "add splice [trig]", "next splice [trig]", "prev splice [trig]", "random splice [trig]", "select splice [cv]", "varispeed v/8 [cv]", "slide [cv]", "morph [cv]", "size [cv]"}
+options.crow_input = {"none", "play [trig]", "play [gate]", "rec [trig]", "rec [gate]", "add splice [trig]", "next splice [trig]", "prev splice [trig]", "random splice [trig]", "select splice [cv]", "varispeed v/8 [cv]", "slide [cv]", "size [cv]", "morph [cv]"}
 options.crow_output = {"none", "gene ramp [cv]", "loop reset [trig]"}
 options.clock_tempo = {"2", "1", "1/2", "1/4", "3/16", "1/6", "1/8", "3/32", "1/12", "1/16","1/32"}
 options.clock_value = {2, 1, 1/2, 1/4, 3/16, 1/6, 1/8, 3/32, 1/12, 1/16, 1/32}
@@ -143,13 +142,15 @@ splice[1].e = MAX_REEL + 1
 splice[1].l = MAX_REEL
 
 voice = {}
-for i = 1, 6 do -- all 6 softcut voices
+for i = 1, 6 do
   voice[i] = {}
   voice[i].s = 1
+  voice[i].s_prev = 1
   voice[i].level = 1
   voice[i].pan = 0
+  voice[i].fc = 18000
+  voice[i].fq = 2
   voice[i].rate_mod = 1
-  voice[i].pos_get = 1
   voice[i].pos_abs = 1
   voice[i].pos_rel = 0
 end
@@ -160,7 +161,6 @@ function load_reel(path)
     local ch, len = audio.file_info(path)
     if ch > 0 and len > 0 then
       softcut.buffer_clear()
-      --buffer_read_mono(file, start_src, start_dst, dur, ch_src, ch_dst, preserve, mix) -- reference
       softcut.buffer_read_mono(path, 0, 1, -1, 1, 1, 0, 1)
       local l = math.min(len / 48000, MAX_REEL)
       init_reel(l)
@@ -177,7 +177,6 @@ function save_reel(txt)
   if txt then
     local length = splice[#splice].e - 1
     util.make_dir(_path.audio .. "concrete")
-    --buffer_write_mono(file, start, dur, buffer) -- reference
     softcut.buffer_write_mono(_path.audio.."concrete/"..txt..".wav", 1, length, 1)
     print("file saved: " .._path.audio .. "concrete/" .. txt .. ".wav")
   else
@@ -191,7 +190,7 @@ function clear_reel()
   reel_is_full = false
   init_recording = true
   init_reel(MAX_REEL)
-  params:set("load_reel", "") -- reset fileselect
+  params:set("load_reel", "")
 end
 
 function init_reel(dur)
@@ -214,12 +213,12 @@ function init_reel(dur)
   print("init reel")
 end
 
-function add_splice(pos) -- add dummy splice via maiden by adding arg in s. if no arg then it takes pos_abs.x§x x
-  table.insert(splice, active_splice + 1, {}) -- make a new entry and shift
-  splice[active_splice + 1].s = pos or voice[1].pos_abs -- start of new splice
-  splice[active_splice + 1].e = splice[active_splice].e -- new end is prev end
-  splice[active_splice].e = pos or voice[1].pos_abs -- end of prev slice
-  splice[active_splice + 1].l = splice[active_splice + 1].e - splice[active_splice + 1].s -- new length
+function add_splice(pos)
+  table.insert(splice, active_splice + 1, {})
+  splice[active_splice + 1].s = pos or voice[1].pos_abs
+  splice[active_splice + 1].e = splice[active_splice].e
+  splice[active_splice].e = pos or voice[1].pos_abs
+  splice[active_splice + 1].l = splice[active_splice + 1].e - splice[active_splice + 1].s
   splice[active_splice].l = splice[active_splice].e - splice[active_splice].s
   set_loops()
   set_start_pos()
@@ -230,9 +229,9 @@ end
 
 function remove_splice()
   if active_splice < #splice then
-    splice[active_splice + 1].s = splice[active_splice].s -- restore to prev start
-    splice[active_splice + 1].l = splice[active_splice + 1].e - splice[active_splice].s -- new length
-    table.remove(splice, active_splice) -- remove current entry and shift
+    splice[active_splice + 1].s = splice[active_splice].s
+    splice[active_splice + 1].l = splice[active_splice + 1].e - splice[active_splice].s
+    table.remove(splice, active_splice)
     set_loops()
     set_start_pos()
     waveviz_splice = true
@@ -242,7 +241,7 @@ function remove_splice()
 end
 
 function append_splice(pos)
-  table.insert(splice, #splice + 1, {}) -- make a new entry at the end of the table
+  table.insert(splice, #splice + 1, {})
   splice[#splice].s = splice[#splice - 1].e
   splice[#splice].e = pos or voice[rec_voice].pos_abs
   splice[#splice].l = splice[#splice].e - splice[#splice].s
@@ -256,7 +255,7 @@ function nudge_splice_start(d)
   if active_splice > 1 then
     splice[active_splice].s = util.clamp(splice[active_splice].s + amt, splice[active_splice - 1].s + 0.01, splice[active_splice].e - 0.01)
     splice[active_splice - 1].e = splice[active_splice].s
-    splice[active_splice - 1].l = splice[active_splice - 1].e - splice[active_splice - 1].s -- new length
+    splice[active_splice - 1].l = splice[active_splice - 1].e - splice[active_splice - 1].s
     splice[active_splice].l = splice[active_splice].e - splice[active_splice].s
   end
   set_loops()
@@ -315,11 +314,10 @@ function delete_splice(splice_num)
       end
     )
     --print_markers()
-    print("deleted splice "..active_splice)
   end
 end
 
--- reverse behaviour not clear, not working as expected
+-- TODO: reverse behaviour not clear, not working as expected
 function flip_splice(splice_num)
   local active_splice = splice_num or active_splice
   -- softcut.buffer_copy_mono(src_ch, dst_ch, start_src, start_dst, dur, fade_time, preserve, reverse)
@@ -331,10 +329,10 @@ function flip_splice(splice_num)
   print("flipped splice "..active_splice)
 end
 
--- preserve not working
+-- TODO: preserve not working. softcut bug?
 function gain_reduction()
   local preserve = 1 - params:get("reduction_level")
-  softcut.buffer_clear_region_channel(1, splice[active_splice].s, splice[active_splice].l, 0, 1 - params:get("reduction_level"))
+  softcut.buffer_clear_region_channel(1, splice[active_splice].s, splice[active_splice].l, 0.01, preserve)
   print("gain reduced by ".. 1 - preserve)
 end
 
@@ -344,7 +342,7 @@ function set_active_splice(inc)
     function()
       clock.sleep(0.1)
       if active_splice ~= prev_splice then
-        set_loops("reset_pos")
+        set_loops("reset_pos") -- TODO: might just remove the msg part.. check if it makes a difference.
         prev_splice = active_splice
         waveviz_splice = true
         softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
@@ -356,6 +354,17 @@ end
 function set_random_splice()
   local inc = math.random(1, #splice) - active_splice
   set_active_splice(inc)
+end
+
+function select_splice(val)
+  local segment = 1 / #splice
+  for i = 1, #splice do
+    if val <= segment * i then
+      local inc = i - active_splice
+      set_active_splice(inc)
+      break
+    end
+  end
 end
 
 -- debug stuff
@@ -400,19 +409,27 @@ function toggle_recording()
   set_rec()
 end
 
+-- TODO: need more testing on rec behavoiur
 function set_rec()
   if rec and play then
     softcut.rec_level(rec_voice, params:get("rec_level"))
     softcut.pre_level(rec_voice, params:get("dub_level"))
-    is_recording = true
     if params:get("rec_dest") ~= 3 then
-      softcut.position(rec_voice, voice[1].pos_abs) -- set positon = voice 1
+      softcut.position(rec_voice, voice[1].pos_abs)
       softcut.loop_start(rec_voice, splice[active_splice].s)
       softcut.loop_end(rec_voice, splice[active_splice].e)
     else
-      softcut.position(rec_voice, splice[#splice].e) -- set position end of last splice
+      softcut.position(rec_voice, splice[#splice].e)
       softcut.loop_start(rec_voice, splice[#splice].e)
       softcut.loop_end(rec_voice, MAX_REEL + 1)
+    end
+    if not is_recording then
+      if params:get("rec_rate") < 3 then
+        softcut.rate(rec_voice, voice_rate)
+      else
+        softcut.rate(rec_voice, voice_rate * 2)
+      end
+      is_recording = true
     end
   elseif rec and not play then
     amp_in[1]:start()
@@ -426,7 +443,7 @@ function set_rec()
         init_reel(voice[rec_voice].pos_abs - 1)
         init_recording = false
         is_recording = false
-      elseif params:get("rec_dest") == 3 then -- add new splice to the end
+      elseif params:get("rec_dest") == 3 then
         append_splice()
         is_recording = false
       else
@@ -441,11 +458,6 @@ function set_rec()
       rec_at_threshold = false
     end
   end
-  if params:get("rec_rate") == 2 then
-    softcut.rate(rec_voice, voice_rate)
-  else
-    softcut.rate(rec_voice, voice_rate * 2)
-  end
 end
 
 function rec_voice_routings()
@@ -453,26 +465,23 @@ function rec_voice_routings()
   if params:get("rec_mode") == 1 then
     for i = 1, GENE_NUM + 1 do
       softcut.level_cut_cut(i, rec_voice, 0)
-      softcut.rec_offset(rec_voice, 0)
     end
     ext_signal = 1
   else
     ext_signal = 1 - sos_signal
     if params:get("rec_dest") == 3 then
       for i = 1, GENE_NUM + 1 do
-        softcut.level_cut_cut(i, rec_voice, voice[i].level * sos_signal)
-        softcut.rec_offset(rec_voice, 0)
+        softcut.level_cut_cut(i, rec_voice, voice[i].level * sos_signal) -- TODO: how to get unity gain when sos is 100%
       end
     else
       for i = 1, GENE_NUM + 1 do
-        softcut.level_cut_cut(i, rec_voice, voice[i].level * sos_signal * 0.20)
-        softcut.rec_offset(rec_voice, 0)
+        softcut.level_cut_cut(i, rec_voice, voice[i].level * sos_signal * 0.20) -- TODO: play with value, testing and tweeking required
       end
     end
   end
   if params:get("rec_input") == 1 then -- L&R
-    softcut.level_input_cut(1, rec_voice, ext_signal * 0.8)
-    softcut.level_input_cut(2, rec_voice, ext_signal * 0.8)
+    softcut.level_input_cut(1, rec_voice, ext_signal * 0.7) -- TODO: also check levels between summed and individual ins. tweek value.
+    softcut.level_input_cut(2, rec_voice, ext_signal * 0.7)
   elseif params:get("rec_input")  == 2 then -- L IN
     softcut.level_input_cut(1, rec_voice, ext_signal * 1)
     softcut.level_input_cut(2, rec_voice, 0)
@@ -491,7 +500,7 @@ end
 function set_levels()
   for i = 1, GENE_NUM do
     if play then
-      local voice_level = params:get("morph") == 0 and voice[i].level * 0.75 or voice[i].level
+      local voice_level = params:get("morph") < 0.04 and voice[i].level * 2/3 or voice[i].level -- TODO: tweek value
       local level = voice_level * glb_level
       softcut.level(i, level)
     else
@@ -500,7 +509,7 @@ function set_levels()
   end
 end
 
-function select_filter(i, option) -- select filter type
+function select_filter(i, option)
   softcut.post_filter_lp(i, option == 1 and 1 or 0) 
   softcut.post_filter_hp(i, option == 2 and 1 or 0) 
   softcut.post_filter_bp(i, option == 3 and 1 or 0) 
@@ -516,9 +525,8 @@ function set_panning()
   end
 end
 
-
 local prev_cut_val = 0
-function set_cutoff(val)
+function set_cutoff(val) --TODO: review impl.
   local inc = 0
   if val > prev_cut_val then
     inc = 2
@@ -532,7 +540,7 @@ function set_cutoff(val)
 end
 
 local prev_q_val = 0
-function set_filter_q(val)
+function set_filter_q(val) --TODO: review impl.
   local inc = 0
   if val > prev_q_val then
     inc = 2
@@ -584,11 +592,14 @@ function reset_morph_params()
       end
       set_rate()
     end
-    -- reset pan
+    -- reset levels and pan
     if morph < 75 then
       for i = 1, GENE_NUM do
+        voice[i].level = params:get("level"..i)
         voice[i].pan = params:get("pan"..i)
       end
+      set_levels()
+      set_panning()
     end
   end
 end
@@ -608,9 +619,9 @@ function set_start_pos()
   end
 end
 
-function set_loops(msg)  
+function set_loops(msg)
   -- calculate start, end and length
-  if params:get("morph_mode") == 1 then -- you might run into trouble if pset loads into clocked mode as voice[1].s == 1
+  if params:get("morph_mode") == 1 then -- --TODO: testing required: you might run into trouble if pset loads into clocked mode as voice[1].s == 1
     voice[1].s = util.clamp(splice[active_splice].s + splice[active_splice].l * params:get("slide"), splice[active_splice].s, splice[active_splice].e)
   end
   gene_length = util.clamp(splice[active_splice].l * params:get("gene_size"), 0.01, splice[active_splice].l)
@@ -747,7 +758,7 @@ end
 -------- ghost voice --------
 function ghost_activity()
   while true do
-    clock.sync(gclk_div) --32n
+    clock.sync(gclk_div)
     if params:get("ghost_active") == 2 and play then
       summon_ghost()
     elseif params:get("ghost_active") == 3 and not play then
@@ -760,7 +771,6 @@ end
 
 function summon_ghost()
   if math.random(100) <= params:get("ghost_prob") then
-    local rates = {0.25, 0.5, 1, -1, -0.5, -0.25}
     local start_pos = 1
     if params:get("ghost_distribution") == 1 then
       start_pos = 1 + math.random() * splice[#splice].e
@@ -768,13 +778,17 @@ function summon_ghost()
       start_pos = splice[active_splice].s + math.random() * splice[active_splice].l
     end
     local end_pos = start_pos + clock.get_beat_sec() * gclk_div
-    local pan = voice[ghost_voice].pan * (math.random() * 20 - 10) / 10
-    local rate = rates[math.random(1, 6)]
     softcut.loop_start(ghost_voice, start_pos)
     softcut.loop_end(ghost_voice, end_pos)
-    softcut.level(ghost_voice, voice[ghost_voice].level * glb_level)
+
+    local rates = {0.25, 0.5, 1, -1, -0.5, -0.25}
+    local rate = rates[math.random(1, 6)]
     softcut.rate(ghost_voice, rate)
+
+    local pan = voice[ghost_voice].pan * (math.random() * 20 - 10) / 10
     softcut.pan(ghost_voice, pan)
+    
+    softcut.level(ghost_voice, voice[ghost_voice].level * glb_level)
   end
   if math.random(100) <= params:get("ghost_duration") then
     softcut.level(ghost_voice, 0)
@@ -784,7 +798,7 @@ end
 
 
 -------- tape warble --------
-function make_warble() -- warbletimer function
+function make_warble()
   local slope = 1 * math.sin(((tau / 100) * (warble_counter)) - (tau / (warble_freq)))
   warble_slope = util.linlin(-1, 1, -1, 0, math.max(-1, math.min(1, slope))) * warble_depth * 0.001
   warble_counter = warble_counter + warble_freq
@@ -802,8 +816,7 @@ function make_warble() -- warbletimer function
     end
   end
   -- stop warble
-  if warble_active and warble_slope > -0.001 then -- nearest value to zero
-    warble_active = false
+  if warble_active and warble_slope > -0.001 then
     set_rate()
   end
 end
@@ -839,7 +852,7 @@ function table_getmax(t)
       max = math.abs(v)
     end
   end
-  return util.clamp(max, 0.5, 1)
+  return util.clamp(max, 0.5, 1) --TODO: tweek min value
 end
 
 
@@ -868,7 +881,6 @@ end
 
 m.event = function(data)
   local msg = midi.to_msg(data)
-  --tab.print(msg)
   if msg.type == "note_on" and msg.ch == midi_channel then
     local semitone = math.pow(2, (msg.note - midi_root) / 12)
     params:set("varispeed", semitone)
@@ -877,100 +889,102 @@ end
 
 
 -------- crow --------
-
-local crow_is = false
-
-function crow_connect()
-  if crow.connected() then
-    crow_is = true
-  else
-    crow_is = false
-  end
-  build_menu()
-end
-
-function crow_disconnect()
-  if crow.connected() then
-    crow_is = true
-  else
-    crow_is = false
-  end
-  build_menu()
-end
-
 function crow_play_trig(v)
-  if v > 2 then
+  if v then
     set_play()
   end
-  print("play trig change: "..v)
 end
 
 function crow_play_gate(v)
-  if not play and v > 2 then
+  if v and not play then
     set_play()
-  elseif play and v < 2 then
+  elseif not v and play then
     set_play()
   end
-  print("play gate change: "..v)
 end
 
 function crow_rec_trig(v)
-  if v > 2 then
-    toggle_rec()
+  if v then
+    toggle_recording()
   end
-  print("rec trig change: "..v)
 end
 
 function crow_rec_gate(v)
-  if not rec and v > 2 then
+  if v and not rec then
     toggle_recording()
-  elseif rec and v < 2 then
+  elseif not v and rec then
     toggle_recording()
   end
-  print("rec gate change: "..v)
 end
 
+function crow_add_splice(v)
+  if v then
+    add_splice()
+  end
+end
+
+function crow_inc_splice(v)
+  if v then
+    set_active_splice(1)
+  end
+end
+
+function crow_dec_splice(v)
+  if v then
+    set_active_splice(-1)
+  end
+end
+
+function crow_rnd_splice(v)
+  if v then
+    set_random_splice()
+  end
+end
+
+local prev_volts = 0 --TODO: test and if it works make this indexable (input ch1 and ch2 will have different values)
 function crow_select_splice(v)
-  local volts = util.clamp(v, 1, 5)
-  local val = util.linlin(1, 5, 0, 1, volts)
-  local segment = 1 / #splice
-
-  print("select splice change: "..volts)
+  if v ~= prev_volts then
+    local volts = util.clamp(v, 1, 5)
+    local val = util.linlin(1, 5, 0, 1, volts)
+    select_splice(val)
+    prev_volts = volts
+  end
 end
 
--- 3 oct range -- 0v is rate == 0 -- redo math... will just do something now.
 function crow_varispeed(v)
-  local volts = util.clamp(v, -3, 3)
-  local note = math.abs(volts) / 12
-  local rate = 0
-  if volts > 0 then
-    rate = math.pow(2, note)
-  elseif volts < 0 then
-    rate = -math.pow(2, note)
+  if v ~= prev_volts then
+    local volts = util.clamp(v, -3, 3)
+    local semitone = math.pow(2, volts)
+    params:set("varispeed", semitone)
+    prev_volts = volts
   end
-  params:set("varispeed", rate)
-  print("varispeed change: "..v)
 end
 
 function crow_slide(v)
-  local volts = util.clamp(v, 0, 5)
-  local val = util.linlin(0, 5, 0, 1, volts)
-  params:set("slide", val)
-  print("slide change: "..v)
+  if v ~= prev_volts then
+    local volts = util.clamp(v, 0, 5)
+    local val = util.linlin(0, 5, 0, 1, volts)
+    params:set("slide", val)
+    prev_volts = volts
+  end
 end
 
 function crow_morph(v)
-  local volts = util.clamp(v, 0, 5)
-  local val = util.linlin(0, 5, 0, 1, volts)
-  params:set("morph", val)
-  print("morph change: "..v)
+  if v ~= prev_volts then
+    local volts = util.clamp(v, 0, 5)
+    local val = util.linlin(0, 5, 0, 1, volts)
+    params:set("morph", val)
+    prev_volts = volts
+  end
 end
 
 function crow_size(v)
-  local volts = util.clamp(v, 0, 5)
-  local val = util.linlin(0, 5, 0, 1, volts)
-  params:set("gene_size", val)
-  print("size change: "..v)
+  if v ~= prev_volts then
+    local volts = util.clamp(v, 0, 5)
+    local val = util.linlin(0, 5, 0, 1, volts)
+    params:set("gene_size", val)
+    prev_volts = volts
+  end
 end
 
 function set_crow_input(ch, idx)
@@ -990,46 +1004,46 @@ function set_crow_input(ch, idx)
     crow.input[ch].change = crow_rec_gate
     crow.input[ch].mode("change", 2.0, 0.25, "both")
   elseif dst == "add splice [trig]" then
-    crow.input[ch].change = add_splice()
+    crow.input[ch].change = crow_add_splice
     crow.input[ch].mode("change", 2.0, 0.25, "rising")
   elseif dst == "next splice [trig]" then
-    crow.input[ch].change = set_active_splice(1)
+    crow.input[ch].change = crow_inc_splice
     crow.input[ch].mode("change", 2.0, 0.25, "rising")
   elseif dst == "prev splice [trig]" then
-    crow.input[ch].change = set_active_splice(-1)
+    crow.input[ch].change = crow_dec_splice
     crow.input[ch].mode("change", 2.0, 0.25, "rising")
   elseif dst == "random splice [trig]" then
-    crow.input[ch].change = set_random_splice()
+    crow.input[ch].change = crow_rnd_splice
     crow.input[ch].mode("change", 2.0, 0.25, "rising")
   elseif dst == "select splice [cv]" then
-    crow.input[1].mode("stream", 0.1)
-    crow.input[1].stream = crow_select_splice
+    crow.input[ch].mode("stream", 0.01)
+    crow.input[ch].stream = crow_select_splice -- TODO: check if you can pass args i.e: crow_select_splice(v, ch) and use ch to set prev_volt..ch
   elseif dst == "varispeed v/8 [cv]" then
-    crow.input[1].mode("stream", 0.1)
-    crow.input[1].stream = crow_varispeed
+    crow.input[ch].stream = crow_varispeed
+    crow.input[ch].mode("stream", 0.01)
   elseif dst == "slide [cv]" then
-    crow.input[1].mode("stream", 0.1)
-    crow.input[1].stream = crow_slide
-  elseif dst == "morph [cv]" then
-    crow.input[1].mode("stream", 0.1)
-    crow.input[1].stream = crow_morph
+    crow.input[ch].stream = crow_slide
+    crow.input[ch].mode("stream", 0.01)
   elseif dst == "size [cv]" then
-    crow.input[1].mode("stream", 0.1)
-    crow.input[1].stream = crow_size
+    crow.input[ch].stream = crow_size
+    crow.input[ch].mode("stream", 0.01)
+  elseif dst == "morph [cv]" then
+    crow.input[ch].stream = crow_morph
+    crow.input[ch].mode("stream", 0.01)
   end
-  print("crow input "..ch.." set to"..dst)
+  print("crow input "..ch.." set to: "..dst)
 end
 
 function set_crow_output(ch, mode)
-    local mode = options.crow_output[mode]
-  if mode == "none" then
-    crow.output[ch].action = "none"
-  elseif mode == "gene ramp [cv]" then
-    crow.output[ch].action = "ar("..gene_length..", 0, lin)"
-  elseif mode == "loop reset [trig]" then
+    local src = options.crow_output[mode]
+  if src == "none" then
+    crow.output[ch] = "none"
+  elseif src == "gene ramp [cv]" then
+    crow.output[ch].action = "ar("..gene_length..",0, 'lin')"
+  elseif src == "loop reset [trig]" then
     crow.output[ch].action = "pulse(0.05, 8, 1)"
   end
-  print("crow output "..ch.." set to"..mode)
+  print("crow output "..ch.." set to: "..src)
 end
 
 
@@ -1056,7 +1070,6 @@ function init()
 
   -- crow params
   params:add_group("crow_params",  "CROW", 6)
-  --params:hide("crow_params")
 
   for i = 1, 2 do
     params:add_option("crow_in_"..i, "input "..i, options.crow_input, 1)
@@ -1098,7 +1111,7 @@ function init()
 
   params:add_group("rec_params", "recording", 9)
 
-  params:add_binary("toggle_rec", "toggle rec", "trigger", 0)
+  params:add_binary("toggle_rec", "> toggle rec", "trigger", 0)
   params:set_action("toggle_rec", function() toggle_recording() end)
 
   params:add_option("rec_mode", "mode", {"input only", "s.o.s"}, 1) 
@@ -1122,7 +1135,10 @@ function init()
   params:add_control("dub_level", "overdub level", controlspec.new(0, 1, "lin", 0, 0.8), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:set_action("dub_level", function() set_rec() end)
 
-  params:add_group("splice_params", "splices", 10)
+  params:add_group("splice_params", "splices", 12)
+
+  params:add_control("splice_select", "organize [relative pos]", controlspec.new(0, 1, "lin", 0, 0, ""))
+  params:set_action("splice_select", function(val) select_splice(val) end)
 
   params:add_binary("add_splice_param", "> add splice", "trigger", 0)
   params:set_action("add_splice_param", function() add_splice() end)
@@ -1135,6 +1151,9 @@ function init()
 
   params:add_binary("prev_splice_param", "> previous splice", "trigger", 0)
   params:set_action("prev_splice_param", function() set_active_splice(-1) end)
+
+  params:add_binary("rand_splice_param", "> random splice", "trigger", 0)
+  params:set_action("rand_splice_param", function() set_random_splice() end)
 
   params:add_binary("flip_splice_param", "> reverse splice", "trigger", 0)
   params:set_action("flip_splice_param", function() flip_splice() end)
@@ -1188,10 +1207,10 @@ function init()
     params:set_action("pan"..i, function(x) voice[i].pan = x set_panning() end)
 
     params:add_control("cutoff"..i, "filter cutoff", controlspec.new(20, 18000, 'exp', 1, 18000, "Hz"))
-    params:set_action("cutoff"..i, function(x) softcut.post_filter_fc(i, x) end)
+    params:set_action("cutoff"..i, function(x) voice[i].fc = x softcut.post_filter_fc(i, x) end)
 
     params:add_control("filter_q"..i, "filter q", controlspec.new(0.1, 4.0, 'exp', 0.01, 2.0, ""))
-    params:set_action("filter_q"..i, function(x) softcut.post_filter_rq(i, x) end)
+    params:set_action("filter_q"..i, function(x) voice[i].fq = x softcut.post_filter_rq(i, x) end)
 
     params:add_option("filter_type"..i, "filter type", {"low pass", "high pass", "band pass", "band reject", "off"}, 1)
     params:set_action("filter_type"..i, function(x) select_filter(i, x) end)
@@ -1209,7 +1228,7 @@ function init()
 
   params:add_option("ghost_distribution", "dispersal", {"free", "contained"})
 
-  params:add_option("ghost_clk", "clock", options.clock_tempo, 9)
+  params:add_option("ghost_clk", "rate", options.clock_tempo, 9)
   params:set_action("ghost_clk", function(idx) gclk_div = options.clock_value[idx] * 4 end)
 
   params:add_separator("ghost_playhead", "playhead")
@@ -1234,6 +1253,9 @@ function init()
 
   params:add_binary("toggle_play", "> toggle play", "trigger", 0)
   params:set_action("toggle_play", function() set_play() end)
+
+  params:add_binary("reset_pos", "> reset position", "trigger", 0)
+  params:set_action("reset_pos", function() set_start_pos() end)
 
   params:add_option("tape_transport", "tape transport", {"new", "used", "old", "vintage", "broken"}, 1)
   params:set_action("tape_transport", function(mode) gbl_rate_slew = options.rate_slew[mode] set_rate_slew(mode) end)
@@ -1268,7 +1290,7 @@ function init()
 
   params:add_option("randomize_rate", "rate @morph > 80", {"off", "on"}, 2)
 
-  params:add_binary("morph_freez", "freeze values", "toggle", 0)
+  params:add_binary("morph_freez", "> freeze values", "toggle", 0)
   params:set_action("morph_freez", function(x) morph_freeze = x == 1 and true or false end)
 
   -- lfo params
@@ -1285,24 +1307,21 @@ function init()
   params:add_group("pan_lfos", "pan lfos", 15 * (GENE_NUM + 1))
   local pan_lfo = {}
   for i = 1, GENE_NUM + 1 do
-    pan_lfo[i] = _lfos:add{min = -1, max = 1}
+    pan_lfo[i] = _lfos:add{min = -1, max = 1, baseline = "center"}
     pan_lfo[i]:add_params("pan_lfo"..i, "playhead "..gene_id[i].." pan")
-    pan_lfo[i]:set("baseline", "center")
     pan_lfo[i]:set("action", function(scaled, raw) params:set("pan"..i, scaled) page_redraw(3) end)
   end
 
   params:add_group("cutoff_lfos", "cutoff lfos", 15 * (GENE_NUM + 1))
   local cutoff_lfo = {}
   for i = 1, GENE_NUM + 1 do
-    cutoff_lfo[i] = _lfos:add{min = 20, max = 18000}
+    cutoff_lfo[i] = _lfos:add{min = 20, max = 18000, baseline = "center"}
     cutoff_lfo[i]:add_params("cutoff_lfo"..i, "playhead "..gene_id[i].." cutoff")
-    cutoff_lfo[i]:set("baseline", "center")
     cutoff_lfo[i]:set("action", function(scaled, raw) params:set("cutoff"..i, scaled) page_redraw(3) end)
   end
 
-  local varispeed_lfo = _lfos:add{min = -4, max = 4}
+  local varispeed_lfo = _lfos:add{min = -4, max = 4, baseline = "center"}
   varispeed_lfo:add_params("varispeed_lfo", "varispeed", "varispeed lfo")
-  varispeed_lfo:set("baseline", "center")
   varispeed_lfo:set("action", function(scaled, raw) params:set("varispeed", scaled) page_redraw(2) end)
 
   local slide_lfo = _lfos:add{min = 0, max = 1}
@@ -1326,8 +1345,8 @@ function init()
     softcut.level_input_cut(2, i, 0)
 
     softcut.play(i, 1)
-    softcut.rec(i, 0) -- not required as we have a separate rec head
-
+    softcut.rec(i, 0)
+    
     softcut.level(i, 1)
     softcut.pan(i, 0)
 
@@ -1360,7 +1379,7 @@ function init()
 
     softcut.play(i, 1)
     softcut.rec(i, 1)
-    softcut.rec_offset(i, 0)
+    softcut.rec_offset(i, -0.06)
 
     softcut.level(i, 0)
     softcut.pan(i, 0)
@@ -1369,7 +1388,7 @@ function init()
     softcut.rec_level(i, 0)
 
     softcut.fade_time(i, 0.1)
-    softcut.level_slew_time(i, 0.01)
+    softcut.level_slew_time(i, 0.1)
     softcut.rate_slew_time(i, 0)
     softcut.rate(i, 1)
 
@@ -1463,9 +1482,10 @@ function init()
   end
 
   -- detect if crow is connected
-  if crow.connected() then
+  if norns.crow.connected() then
     crow_is = true
   end
+
   -- metros
   screenredrawtimer = metro.init(function() screen_redraw() end, 1/15, -1)
   screenredrawtimer:start()
@@ -1508,25 +1528,6 @@ function init()
       end
     end
   end
-
-  -- currently not in use as it only lisens to sc engine out
-  --[[
-amp_out = {}
-  local amp_out_src = {"amp_out_l", "amp_out_r"}
-  for ch = 1, 2 do
-    amp_out[ch] = poll.set(amp_out_src[ch])
-    amp_out[ch].time = 0.01
-    amp_out[ch].callback = function(val)
-      local prev_val = val
-      if prev_val ~= val then
-        print("amp out "..val)
-      end
-    end
-  end
-
-  amp_out[1]:start()
-  amp_out[2]:start()
-  ]]
   
   -- set defaults
   set_rate()
@@ -1553,6 +1554,14 @@ function poll_positions(i, pos)
       set_start_pos()
     end
   end
+
+  -- continuous pos tracking (untested) TODO!
+  if i > 1 and i < 5 and voice[i].s_prev ~= voice[i].s then
+    local new_pos = voice[i].pos_abs + (voice[i].s - voice[1].s)
+    --softcut.position(i, new_pos)
+    voice[i].s_prev = voice[i].s
+  end
+
   -- ensure that recording stops when the rec head reaches the end of the reel.
   if i == rec_voice and rec and (params:get("rec_dest") == 3 or init_recording) then
     if voice[rec_voice].pos_abs >= MAX_REEL + 0.8 and not reel_is_full then --  MAX_REEL + 1 you might have to go a bit lower than the softcut.loop_end(rec_voice, end)
@@ -1664,7 +1673,7 @@ function enc(n, d)
     else
       if n == 2 then
         if shift then
-          params:delta("rec_dest", d) -- visualize in UX: follow gene, active splice, new splice --> f, a, n
+          params:delta("rec_dest", d) -- TODO: visualize in UX: . : > next to "R"
         else
           if params:get("rec_mode") == 1 then
             params:delta("rec_level", d)
@@ -1674,7 +1683,7 @@ function enc(n, d)
         end
       elseif n == 3 then
         if shift then
-          params:delta("rec_rate", d) -- visualize in UX: follow, normal, halfspeed, reverse
+          params:delta("rec_mode", d) -- TODO: visualize in UX
         else
           params:delta("dub_level", d)
         end
@@ -1730,7 +1739,6 @@ function redraw()
   screen.level(shift and 15 or 0)
   screen.rect(126, 1, 2, 2)
   screen.fill()
-
 
   if pageNum == 1 then
     screen.level(focus_page1 == 0 and 15 or 4)
@@ -1863,6 +1871,8 @@ function redraw()
     screen.move(10, 38)
     screen.text("R")
 
+    -- TODO: add rec_dest icons
+
     -- play key
     screen.level(focus_page1 == 1 and 15 or 4)
     if play then
@@ -1886,6 +1896,21 @@ function redraw()
     screen.rect(108, 60, 5, -util.linlin(0, 1, 0, 30, input_param))
     screen.fill()
 
+    --TODO: tweek values to make a zebra crossing
+    --[[
+    if params:get("rec_mode") == 2 then
+      screen.level(0)
+      for i = 1, 14 do
+        screen.move(109, i + 60)
+        screen.line_rel(4, 0)
+        screen.stroke()
+      end
+      screen.level(15)
+      screen.move(108, -util.linlin(0, 1, 0, 30, input_param) + 60)
+      screen.stroke()
+    end
+    ]]
+    
     -- overdub level
     screen.level(15)
     screen.rect(118, 30, 6, 31)
@@ -1904,6 +1929,7 @@ function redraw()
     screen.level(focus_page2 == 0 and 15 or 4)
     screen.rect(4, 53, 15, - util.linlin(0, 1, 0, 49  , params:get("morph")))
     screen.fill()
+    --TODO: tweek. zebra crossing might be nicer!
     if morph_freeze then
       screen.level(0)
       for i = 1, 4 do
@@ -2014,12 +2040,12 @@ function redraw()
         end
       elseif parameter == "cutoff" then
         screen.level(focus_page3 == 0 and 15 or 4)
-        screen.rect(8 + off_x, 8, util.explin(20, 18000, 0, 49, params:get(parameter..i)), 15)
+        screen.rect(8 + off_x, 8, util.explin(20, 18000, 0, 49, voice[i].fc), 15)
         screen.fill()
         --screen.move(util.explin(20, 18000, 8, 58, params:get(parameter..1)), 8)
       elseif parameter == "filter_q" then
         screen.level(focus_page3 == 0 and 15 or 4)
-        screen.rect(58 + off_x, 8, - util.linlin(0.01, 4, 0, 49, params:get(parameter..i)), 15)
+        screen.rect(58 + off_x, 8, - util.linlin(0.01, 4, 0, 49, voice[i].fq), 15)
         screen.fill()
         --screen.move(util.linlin(0.01, 4, 8, 58, params:get(parameter..1)), 8)
       end
@@ -2058,12 +2084,12 @@ function redraw()
         end
       elseif parameter == "cutoff" then
         screen.level(focus_page3 == 1 and 15 or 4)
-        screen.rect(8 + off_x, 40, util.explin(20, 18000, 0, 49, params:get(parameter..i)), 15)
+        screen.rect(8 + off_x, 40, util.explin(20, 18000, 0, 49, voice[i].fc), 15)
         screen.fill()
         --screen.move(util.explin(20, 18000, 8, 58, params:get(parameter..1)), 8)
       elseif parameter == "filter_q" then
         screen.level(focus_page3 == 1 and 15 or 4)
-        screen.rect(58 + off_x, 40, - util.linlin(0.01, 4, 0, 49, params:get(parameter..i)), 15)
+        screen.rect(58 + off_x, 40, - util.linlin(0.01, 4, 0, 49, voice[i].fq), 15)
         screen.fill()
         --screen.move(util.linlin(0.01, 4, 8, 58, params:get(parameter..1)), 8)
       end
@@ -2305,6 +2331,16 @@ end
 function drawarc_disconnect()
   arc_is = false
   hardwareredrawtimer:stop()
+  build_menu()
+end
+
+function crow_connect()
+  crow_is = true
+  build_menu()
+end
+
+function crow_disconnect()
+  crow_is = false
   build_menu()
 end
 
