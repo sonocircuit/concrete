@@ -5,6 +5,7 @@
 -- explorations
 --
 --
+--
 -- for docs go to:
 -- >> github.com
 --    /sonocircuit/concrete
@@ -13,16 +14,17 @@
 -- >> code/concrete/docs
 --
 --
+--
 --       -- ----- -- -
 --          -- ----- -- -
 --             -- ----- -- -
 --
 --
 
--- TODO:
 -----------------------------------------------------------------------------------------------------------------------------
--- review s.o.s levels, routing etc.
--- review crow i/o
+-- TODO:
+-- review crow implementation (last priority, even post release)
+-- revisit LFOs --> matrix mod? adapt lfo lib?
 -----------------------------------------------------------------------------------------------------------------------------
 
 local a = arc.connect()
@@ -31,11 +33,11 @@ local m = midi.connect()
 local fileselect = require 'fileselect'
 local textentry = require 'textentry'
 local mu = require 'musicutil'
-local _lfos = require 'lfo'
+--local _lfos = require 'lfo'
 
 -------- variables --------
 local pset_load = false
-local default_pset = 1
+local default_pset = 6
 
 local shift = false
 local pageNum = 1
@@ -70,7 +72,8 @@ local init_recording = true
 local waveviz_reel = false
 local waveviz_splice = false
 local save_buffer = false
-local MAX_REEL = 320 -- seconds
+local filename_append = ""
+local MAX_REEL = 320
 local GENE_NUM = 4
 local ghost_voice = 5
 local rec_voice = 6
@@ -141,12 +144,12 @@ splice[1].s = 1
 splice[1].e = MAX_REEL + 1
 splice[1].l = MAX_REEL
 
-voice = {}
+local voice = {}
 for i = 1, 6 do
   voice[i] = {}
+  voice[i].active = true
   voice[i].s = 1
-  voice[i].s_prev = 1
-  voice[i].level = 1
+  voice[i].level = 0
   voice[i].pan = 0
   voice[i].fc = 18000
   voice[i].fq = 2
@@ -164,13 +167,32 @@ function load_reel(path)
       softcut.buffer_read_mono(path, 0, 1, -1, 1, 1, 0, 1)
       local l = math.min(len / 48000, MAX_REEL)
       init_reel(l)
-      reel_has_audio = true
-      init_recording = false
       print("file loaded: "..path.." is "..l.."s")
     else
       print("not a sound file")
     end
   end
+end
+
+function load_splice()
+  local ch, len = audio.file_info(filename_append)
+  if ch > 0 and len > 0 then
+    if reel_has_audio then
+      local start_pos = splice[#splice].e
+      softcut.buffer_read_mono(filename_append, 0, start_pos, -1, 1, 1, 0, 1)
+      local l = math.min(len / 48000, (MAX_REEL - start_pos + 1))
+      append_splice(start_pos + l)
+      print("splice added: "..filename_append.." is "..l.."s")
+    else
+      softcut.buffer_read_mono(filename_append, 0, 1, -1, 1, 1, 0, 1)
+      local l = math.min(len / 48000, MAX_REEL)
+      init_reel(l)
+      print("splice added: "..filename_append.." is "..l.."s")
+    end
+  else
+    print("not a sound file")
+  end
+  filename_append = ""
 end
 
 function save_reel(txt)
@@ -186,11 +208,11 @@ end
 
 function clear_reel()
   softcut.buffer_clear()
-  reel_has_audio = false
   reel_is_full = false
   init_recording = true
-  init_reel(MAX_REEL)
+  reel_has_audio = false
   params:set("load_reel", "")
+  init_reel(MAX_REEL)
 end
 
 function init_reel(dur)
@@ -200,17 +222,14 @@ function init_reel(dur)
   splice[1].s = 1
   splice[1].e = 1 + dur
   splice[1].l = dur
+  reel_has_audio = true
+  init_recording = false
   waveviz_reel = true
   waveviz_splice = true
   softcut.render_buffer(1, 1, dur, 128)
   set_loops()
   set_start_pos()
-  if dur < MAX_REEL then
-    reel_is_full = false
-  else
-    reel_is_full = true
-  end
-  print("init reel")
+  print("init reel > length: "..dur)
 end
 
 function add_splice(pos)
@@ -317,23 +336,35 @@ function delete_splice(splice_num)
   end
 end
 
--- TODO: reverse behaviour not clear, not working as expected
 function flip_splice(splice_num)
   local active_splice = splice_num or active_splice
-  -- softcut.buffer_copy_mono(src_ch, dst_ch, start_src, start_dst, dur, fade_time, preserve, reverse)
-  softcut.buffer_copy_mono(1, 1, splice[active_splice].s, splice[active_splice].e, splice[active_splice].l, 0.01, 0, 1)
-  set_loops()
-  waveviz_reel = true
-  softcut.render_buffer(1, 1, splice[#splice].e - 1, 128)
+  softcut.buffer_copy_mono(1, 2, splice[active_splice].s, splice[active_splice].s, splice[active_splice].l, 0.01, 0, 1)
+  clock.run(
+    function()
+      clock.sleep(0.1)
+      softcut.buffer_copy_mono(2, 1, splice[active_splice].s, splice[active_splice].s, splice[active_splice].l, 0.01, 0, 0)
+      set_loops()
+      waveviz_reel = true
+      softcut.render_buffer(1, 1, splice[#splice].e - 1, 128)
+      clock.run(
+        function()
+          clock.sleep(0.1)
+          waveviz_splice = true
+          softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
+        end
+      )
+    end
+  )
   --print_markers()
-  print("flipped splice "..active_splice)
+  --print("flipped splice "..active_splice)
 end
 
--- TODO: preserve not working. softcut bug?
 function gain_reduction()
   local preserve = 1 - params:get("reduction_level")
-  softcut.buffer_clear_region_channel(1, splice[active_splice].s, splice[active_splice].l, 0.01, preserve)
-  print("gain reduced by ".. 1 - preserve)
+  softcut.buffer_clear_region(splice[active_splice].s, splice[active_splice].l, 0.01, 0.794)
+  waveviz_reel = true
+  softcut.render_buffer(1, 1, splice[#splice].e - 1, 128)
+  --print("gain reduced by -1dB")
 end
 
 function set_active_splice(inc)
@@ -342,7 +373,11 @@ function set_active_splice(inc)
     function()
       clock.sleep(0.1)
       if active_splice ~= prev_splice then
-        set_loops("reset_pos") -- TODO: might just remove the msg part.. check if it makes a difference.
+        if params:get("morph_mode") == 2 then
+          voice[1].s = util.clamp(splice[active_splice].s + splice[active_splice].l * params:get("slide"), splice[active_splice].s, splice[active_splice].e)
+        end
+        set_loops()
+        set_start_pos()
         prev_splice = active_splice
         waveviz_splice = true
         softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
@@ -394,6 +429,7 @@ function set_play()
     set_rec()
     set_levels()
   end
+  page_redraw(1)
 end
 
 function toggle_recording()
@@ -407,28 +443,27 @@ function toggle_recording()
     rec = not rec
   end
   set_rec()
+  page_redraw(1)
 end
 
--- TODO: need more testing on rec behavoiur
 function set_rec()
   if rec and play then
     softcut.rec_level(rec_voice, params:get("rec_level"))
     softcut.pre_level(rec_voice, params:get("dub_level"))
-    if params:get("rec_dest") ~= 3 then
-      softcut.position(rec_voice, voice[1].pos_abs)
-      softcut.loop_start(rec_voice, splice[active_splice].s)
-      softcut.loop_end(rec_voice, splice[active_splice].e)
-    else
-      softcut.position(rec_voice, splice[#splice].e)
-      softcut.loop_start(rec_voice, splice[#splice].e)
-      softcut.loop_end(rec_voice, MAX_REEL + 1)
-    end
     if not is_recording then
-      if params:get("rec_rate") < 3 then
-        softcut.rate(rec_voice, voice_rate)
+      -- set position
+      if params:get("rec_dest") ~= 3 then
+        softcut.position(rec_voice, voice[1].pos_abs)
+        softcut.loop_start(rec_voice, splice[active_splice].s)
+        softcut.loop_end(rec_voice, splice[active_splice].e)
       else
-        softcut.rate(rec_voice, voice_rate * 2)
+        softcut.position(rec_voice, splice[#splice].e)
+        softcut.loop_start(rec_voice, splice[#splice].e)
+        softcut.loop_end(rec_voice, MAX_REEL + 1)
       end
+      -- set rate
+      local rate = params:get("rec_rate") < 3 and math.abs(voice_rate) or math.abs(voice_rate * 2)
+      softcut.rate(rec_voice, rate)
       is_recording = true
     end
   elseif rec and not play then
@@ -458,29 +493,53 @@ function set_rec()
       rec_at_threshold = false
     end
   end
+  set_levels()
 end
 
-function rec_voice_routings()
-  sos_signal = params:get("sos_level")
-  if params:get("rec_mode") == 1 then
-    for i = 1, GENE_NUM + 1 do
-      softcut.level_cut_cut(i, rec_voice, 0)
-    end
-    ext_signal = 1
-  else
-    ext_signal = 1 - sos_signal
-    if params:get("rec_dest") == 3 then
-      for i = 1, GENE_NUM + 1 do
-        softcut.level_cut_cut(i, rec_voice, voice[i].level * sos_signal) -- TODO: how to get unity gain when sos is 100%
-      end
+function set_levels()
+  -- voice levels
+  for i = 1, GENE_NUM do
+    local level = voice[i].level * glb_level
+    if play and voice[i].active then
+      softcut.level(i, level)
     else
-      for i = 1, GENE_NUM + 1 do
-        softcut.level_cut_cut(i, rec_voice, voice[i].level * sos_signal * 0.20) -- TODO: play with value, testing and tweeking required
-      end
+      softcut.level(i, 0)
     end
   end
+  -- rec levels
+  if params:get("rec_mode") == 1 then
+    ext_signal = sos_signal
+    for i = 1, GENE_NUM do
+      softcut.level_cut_cut(i, rec_voice, 0)
+    end
+    set_input_routing()
+  else
+    -- set input level
+    ext_signal = 1 - sos_signal
+    -- and set levels
+    if get_active_voices() == 1 then
+      level_reduction = 0.9
+    elseif get_active_voices() == 2 then
+      level_reduction = 0.75
+    elseif get_active_voices() == 3 then
+      level_reduction = 0.6
+    elseif get_active_voices() == 4 then
+      level_reduction = 0.5
+    end
+    for i = 1, GENE_NUM do
+      if voice[i].active then
+        softcut.level_cut_cut(i, rec_voice, voice[i].level * sos_signal * level_reduction)
+      else
+        softcut.level_cut_cut(i, rec_voice, 0)
+      end
+    end
+    set_input_routing()
+  end
+end
+
+function set_input_routing()
   if params:get("rec_input") == 1 then -- L&R
-    softcut.level_input_cut(1, rec_voice, ext_signal * 0.7) -- TODO: also check levels between summed and individual ins. tweek value.
+    softcut.level_input_cut(1, rec_voice, ext_signal * 0.7)
     softcut.level_input_cut(2, rec_voice, ext_signal * 0.7)
   elseif params:get("rec_input")  == 2 then -- L IN
     softcut.level_input_cut(1, rec_voice, ext_signal * 1)
@@ -492,19 +551,7 @@ function rec_voice_routings()
     softcut.level_input_cut(1, rec_voice, 0)
     softcut.level_input_cut(2, rec_voice, 0)
     if params:get("rec_mode") == 1 then
-      params:set("rec_mode", 2)
-    end
-  end
-end
-
-function set_levels()
-  for i = 1, GENE_NUM do
-    if play then
-      local voice_level = params:get("morph") < 0.04 and voice[i].level * 2/3 or voice[i].level -- TODO: tweek value
-      local level = voice_level * glb_level
-      softcut.level(i, level)
-    else
-      softcut.level(i, 0)
+      params:set("rec_mode", 2) -- force to s.o.s mode
     end
   end
 end
@@ -515,7 +562,6 @@ function select_filter(i, option)
   softcut.post_filter_bp(i, option == 3 and 1 or 0) 
   softcut.post_filter_br(i, option == 4 and 1 or 0)
   softcut.post_filter_dry(i, option == 5 and 1 or 0)
-  page_redraw(3)
 end
 
 function set_panning()
@@ -525,32 +571,49 @@ function set_panning()
   end
 end
 
-local prev_cut_val = 0
-function set_cutoff(val) --TODO: review impl.
-  local inc = 0
-  if val > prev_cut_val then
-    inc = 2
-  else
-    inc = - 2
-  end
+
+local delta_viz_fc = "<  >"
+function set_cutoff(d)
+  local min = math.min(voice[1].fc, voice[2].fc, voice[3].fc, voice[4].fc)
+  local max = math.max(voice[1].fc, voice[2].fc, voice[3].fc, voice[4].fc)
   for i = 1, GENE_NUM do
-    params:delta("cutoff"..i, inc)
+    if d < 0 and params:get("cutoff"..i) > 20 then
+      params:delta("cutoff"..i, d)
+      params:set("global_cutoff", 0)
+      delta_viz_fc = "<<"
+    elseif d > 0 and params:get("cutoff"..i) < 18000 then
+      params:delta("cutoff"..i, d)
+      params:set("global_cutoff", 0)
+      delta_viz_fc = ">>"
+    end
   end
-  prev_cut_val = val
+  if d < 0 and min == 20 then
+    delta_viz_fc = "|<"
+  elseif d > 0 and max == 18000 then
+    delta_viz_fc = ">|"
+  end
 end
 
-local prev_q_val = 0
-function set_filter_q(val) --TODO: review impl.
-  local inc = 0
-  if val > prev_q_val then
-    inc = 2
-  else
-    inc = - 2
-  end
+local delta_viz_fq = "<  >"
+function set_filter_q(d)
+  local min = math.min(voice[1].fq, voice[2].fq, voice[3].fq, voice[4].fq)
+  local max = math.max(voice[1].fq, voice[2].fq, voice[3].fq, voice[4].fq)
   for i = 1, GENE_NUM do
-    params:delta("filter_q"..i, inc)
+    if d < 0 and params:get("filter_q"..i) > 0.1 then
+      params:delta("filter_q"..i, d)
+      params:set("global_filter_q", 0)
+      delta_viz_fq = "<<"
+    elseif d > 0 and params:get("filter_q"..i) < 4 then
+      params:delta("filter_q"..i, d)
+      params:set("global_filter_q", 0)
+      delta_viz_fq = ">>"
+    end
   end
-  prev_q_val = val
+  if d < 0 and min == 0.1 then
+    delta_viz_fq = "|<"
+  elseif d > 0 and max == 4 then
+    delta_viz_fq = ">|"
+  end
 end
 
 function set_rate()
@@ -559,7 +622,8 @@ function set_rate()
     softcut.rate(i, rate)
   end
   if params:get("rec_rate") == 1 then
-    softcut.rate(rec_voice, voice_rate)
+    local rate = math.abs(voice_rate)
+    softcut.rate(rec_voice, rate)
   end
 end
 
@@ -582,24 +646,30 @@ function set_rate_slew(mode)
   end
 end
 
+local rate_rst = false
+local pan_rst = false
 function reset_morph_params()
   if not morph_freeze then
     local morph = params:get("morph") * 100
+    if morph > 79 then rate_rst = true end
+    if morph > 74 then pan_rst = true end
     -- reset rate mod
-    if morph < 80 then
+    if morph < 80 and rate_rst then
       for i = 1, GENE_NUM do
         voice[i].rate_mod = 1
       end
       set_rate()
+      rate_rst = false
     end
     -- reset levels and pan
-    if morph < 75 then
+    if morph < 75 and pan_rst then
       for i = 1, GENE_NUM do
         voice[i].level = params:get("level"..i)
         voice[i].pan = params:get("pan"..i)
       end
       set_levels()
       set_panning()
+      pan_rst = false
     end
   end
 end
@@ -617,9 +687,11 @@ function set_start_pos()
       crow.output[i]()
     end
   end
+  set_levels()
+  page_redraw(1)
 end
 
-function set_loops(msg)
+function set_loops()
   -- calculate start, end and length
   if params:get("morph_mode") == 1 then -- --TODO: testing required: you might run into trouble if pset loads into clocked mode as voice[1].s == 1
     voice[1].s = util.clamp(splice[active_splice].s + splice[active_splice].l * params:get("slide"), splice[active_splice].s, splice[active_splice].e)
@@ -632,55 +704,63 @@ function set_loops(msg)
   end
   -- morph genes according to the morph param
   local mval = params:get("morph") * 100
-  if mval < 1 then
+  local sval = params:get("morph") * 1.25
+  if mval < 5 then
     -- set all to same start pos
+    voice[1].active = true
     for i = 2, GENE_NUM do
       voice[i].s = voice[1].s
+      voice[i].active = false
     end
-  elseif mval > 0 and mval <= 30 then
+  elseif mval >= 5 and mval <= 30 then
     -- shift gene 2 only
-    local shift_amount = (gene_length / 2) * params:get("morph") * 1.25
+    local shift_amount = (gene_length / 2) * sval
     voice[2].s = voice[1].s + shift_amount
     if voice[2].s > splice[active_splice].e then
       voice[2].s = voice[2].s - splice[active_splice].l
     end
+    voice[2].active = true
     -- keep others aligned
     for i = 3, GENE_NUM do
       voice[i].s = voice[1].s
+      voice[i].active = false
     end
   elseif mval > 30 and mval <= 60 then
     -- shift gene 2 + 3 
-    local shift_amount = (gene_length / 3) * params:get("morph") * 1.25
+    local shift_amount = (gene_length / 3) * sval
     voice[2].s = voice[1].s + shift_amount
     if voice[2].s > splice[active_splice].e then
       voice[2].s = voice[2].s - splice[active_splice].l
     end
+    voice[2].active = true
     voice[3].s = voice[2].s + shift_amount
     if voice[3].s > splice[active_splice].e then
       voice[3].s = voice[2].s - splice[active_splice].l
     end
+    voice[3].active = true
     -- keep gene 4 aligned
     voice[4].s = voice[1].s
+    voice[4].active = false
   elseif mval > 60 and mval <= 90 then
     -- shift gene 2 + 3 + 4
-    local shift_amount = (gene_length / 3) * params:get("morph") * 1.25
+    local shift_amount = (gene_length / 4) * sval
     voice[2].s = voice[1].s + shift_amount
     if voice[2].s > splice[active_splice].e then
       voice[2].s = voice[2].s - splice[active_splice].l
     end
+    voice[2].active = true
     voice[3].s = voice[2].s + shift_amount
     if voice[3].s > splice[active_splice].e then
       voice[3].s = voice[3].s - splice[active_splice].l
     end
+    voice[3].active = true
     voice[4].s = voice[3].s + shift_amount
     if voice[4].s > splice[active_splice].e then
       voice[4].s = voice[4].s - splice[active_splice].l
     end
+    voice[4].active = true
   elseif mval > 90 then -- if > 90 then max rand and changing start pos will not change the start pos of the other genes.
     -- keep things how they are
-  end
-  if msg == "reset_pos" then
-    set_start_pos()
   end
 end
 
@@ -699,14 +779,14 @@ function morph_values()
         end
         page_redraw(3)
       end
-      if mval > 74 and params:get("randomize_level") == 2 then 
+      if mval >= 75 and params:get("randomize_level") == 2 then 
         for i = 1, GENE_NUM do
           voice[i].level = math.random(25, 100) / 100
           set_levels()
         end
         page_redraw(3)
       end
-      if mval > 80 and mval < 90 and params:get("randomize_rate") == 2 then 
+      if mval >= 80 and mval < 85 and params:get("randomize_rate") == 2 then 
         for i = 2, GENE_NUM do
           local dice = math.random(-1, 1)
           if dice ~= 0 then
@@ -714,7 +794,7 @@ function morph_values()
             set_rate()
           end
         end
-      elseif mval >= 90 and mval < 95 and params:get("randomize_rate") == 2 then
+      elseif mval >= 85 and mval < 90 and params:get("randomize_rate") == 2 then
         for i = 2, GENE_NUM do
           local dice = math.random(-2, 2)
           if dice ~= 0 then
@@ -722,10 +802,21 @@ function morph_values()
             set_rate()
           end
         end
-      elseif mval >= 95 and params:get("randomize_rate") == 2 then
+      elseif mval >= 90 and mval < 95 and params:get("randomize_rate") == 2 then
         for i = 2, GENE_NUM do
           local rnd = math.random(#scale[params:get("scale")])
           voice[i].rate_mod = scale[params:get("scale")][rnd]
+          set_rate()
+        end
+      elseif mval >= 95 and params:get("randomize_rate") == 2 then
+        for i = 2, GENE_NUM do
+          local rnd = math.random(#scale[params:get("scale")])
+          local dice = math.random(-2, 2)
+          if dice ~= 0 then
+            voice[i].rate_mod = scale[params:get("scale")][rnd] * dice
+          else
+            voice[i].rate_mod = scale[params:get("scale")][rnd]
+          end
           set_rate()
         end
       end
@@ -770,7 +861,10 @@ function ghost_activity()
 end
 
 function summon_ghost()
+  -- ghost here
   if math.random(100) <= params:get("ghost_prob") then
+    voice[ghost_voice].active = true
+    -- set loop
     local start_pos = 1
     if params:get("ghost_distribution") == 1 then
       start_pos = 1 + math.random() * splice[#splice].e
@@ -780,21 +874,33 @@ function summon_ghost()
     local end_pos = start_pos + clock.get_beat_sec() * gclk_div
     softcut.loop_start(ghost_voice, start_pos)
     softcut.loop_end(ghost_voice, end_pos)
-
+    -- set rate
     local rates = {0.25, 0.5, 1, -1, -0.5, -0.25}
     local rate = rates[math.random(1, 6)]
     softcut.rate(ghost_voice, rate)
-
+    -- set pan
     local pan = voice[ghost_voice].pan * (math.random() * 20 - 10) / 10
     softcut.pan(ghost_voice, pan)
-    
-    softcut.level(ghost_voice, voice[ghost_voice].level * glb_level)
+    -- let level
+    local ghost_level = voice[ghost_voice].level * glb_level
+    softcut.level(ghost_voice, ghost_level)
   end
+  -- ghost gone
   if math.random(100) <= params:get("ghost_duration") then
-    softcut.level(ghost_voice, 0)
+    voice[ghost_voice].active = false
+    local ghost_level = 0
+    softcut.level(ghost_voice, ghost_level)
+  end
+  -- set rec levels
+  if rec then
+    if params:get("rec_mode") == 1 or params:get("ghost_active") == 1 or params:get("ghost_active") == 3 then
+      softcut.level_cut_cut(ghost_voice, rec_voice, 0)
+    else
+      local level = voice[ghost_voice].active and voice[ghost_voice].level * sos_signal or 0
+      softcut.level_cut_cut(ghost_voice, rec_voice, level)
+    end
   end
 end
-
 
 
 -------- tape warble --------
@@ -840,7 +946,7 @@ function wave_render(ch, start, i, s)
     waveform_splice_samples = s
     waveviz_splice = false
     wave_splice_gain = table_getmax(waveform_splice_samples) / 0.8
-    reel_has_audio = wave_reel_gain > 0 and true or false
+    --reel_has_audio = wave_reel_gain > 0 and true or false
   end
   dirtyscreen = true
 end
@@ -852,7 +958,7 @@ function table_getmax(t)
       max = math.abs(v)
     end
   end
-  return util.clamp(max, 0.5, 1) --TODO: tweek min value
+  return util.clamp(max, 0.4, 1)
 end
 
 
@@ -941,10 +1047,10 @@ function crow_rnd_splice(v)
   end
 end
 
-local prev_volts = 0 --TODO: test and if it works make this indexable (input ch1 and ch2 will have different values)
+local prev_volts = 0
 function crow_select_splice(v)
+  local volts = util.clamp(v, 1, 5)
   if v ~= prev_volts then
-    local volts = util.clamp(v, 1, 5)
     local val = util.linlin(1, 5, 0, 1, volts)
     select_splice(val)
     prev_volts = volts
@@ -952,11 +1058,12 @@ function crow_select_splice(v)
 end
 
 function crow_varispeed(v)
-  if v ~= prev_volts then
-    local volts = util.clamp(v, -3, 3)
+  local volts = util.round(util.clamp(v, -3, 3), 0.01)
+  if volts ~= prev_volts then
     local semitone = math.pow(2, volts)
     params:set("varispeed", semitone)
     prev_volts = volts
+    print(volts)
   end
 end
 
@@ -1017,7 +1124,7 @@ function set_crow_input(ch, idx)
     crow.input[ch].mode("change", 2.0, 0.25, "rising")
   elseif dst == "select splice [cv]" then
     crow.input[ch].mode("stream", 0.01)
-    crow.input[ch].stream = crow_select_splice -- TODO: check if you can pass args i.e: crow_select_splice(v, ch) and use ch to set prev_volt..ch
+    crow.input[ch].stream = crow_select_splice
   elseif dst == "varispeed v/8 [cv]" then
     crow.input[ch].stream = crow_varispeed
     crow.input[ch].mode("stream", 0.01)
@@ -1031,7 +1138,7 @@ function set_crow_input(ch, idx)
     crow.input[ch].stream = crow_morph
     crow.input[ch].mode("stream", 0.01)
   end
-  print("crow input "..ch.." set to: "..dst)
+  --print("crow input "..ch.." set to: "..dst)
 end
 
 function set_crow_output(ch, mode)
@@ -1043,13 +1150,23 @@ function set_crow_output(ch, mode)
   elseif src == "loop reset [trig]" then
     crow.output[ch].action = "pulse(0.05, 8, 1)"
   end
-  print("crow output "..ch.." set to: "..src)
+  --print("crow output "..ch.." set to: "..src)
 end
 
 
 -------- helpers --------
 function round_form(param, quant, form)
   return(util.round(param, quant)..form)
+end
+
+function get_active_voices()
+  local active_voices = 1
+  for i = 2, GENE_NUM do
+    if voice[i].active then
+      active_voices = active_voices + 1
+    end
+  end
+  return active_voices
 end
 
 
@@ -1093,7 +1210,7 @@ function init()
   -- reel params
   params:add_separator("reel", "reel")
 
-  params:add_group("save_load", "save & load", 5)
+  params:add_group("load_save_reel", "load & save", 4)
 
   params:add_file("load_reel", "> load reel", "")
   params:set_action("load_reel", function(path) load_reel(path) end)
@@ -1104,9 +1221,7 @@ function init()
   params:add_option("save_buffer_pset", "? save reel with pset", {"no", "yes"}, 1)
   params:set_action("save_buffer_pset", function(x) save_buffer = x == 2 and true or false end)
 
-  params:add_separator("reel_danger_zone", "danger zone")
-
-  params:add_trigger("clear_reel", "!! clear reel")
+  params:add_trigger("clear_reel", "!! clear and reset reel !!")
   params:set_action("clear_reel", function() clear_reel() end)
 
   params:add_group("rec_params", "recording", 9)
@@ -1115,36 +1230,43 @@ function init()
   params:set_action("toggle_rec", function() toggle_recording() end)
 
   params:add_option("rec_mode", "mode", {"input only", "s.o.s"}, 1) 
-  params:set_action("rec_mode", function() rec_voice_routings() end)
+  params:set_action("rec_mode", function() set_levels() end)
 
   params:add_option("rec_input", "input", {"summed", "left", "right", "off"}, 1)
-  params:set_action("rec_input", function() rec_voice_routings() end)
+  params:set_action("rec_input", function() set_levels() end)
 
   params:add_option("rec_dest", "destination", {"follow loop", "active splice", "new splice"}, 1)
 
   params:add_option("rec_rate", "rate", {"follow rate", "constant", "highspeed"}, 1)
 
-  params:add_control("rec_threshold", "threshold", controlspec.new(-40, 6, 'lin', 0.01, -12, "dB"))
+  params:add_control("rec_threshold", "threshold", controlspec.new(-40, 6, 'lin', 0, -12, "dB"))
 
   params:add_control("sos_level", "s.o.s level", controlspec.new(0, 1, "lin", 0, 0), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-  params:set_action("sos_level", function() rec_voice_routings() end)
+  params:set_action("sos_level", function(val) sos_signal = val set_levels() page_redraw(1) end)
 
   params:add_control("rec_level", "rec level", controlspec.new(0, 1, "lin", 0, 1), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:set_action("rec_level", function() set_rec() end)
 
   params:add_control("dub_level", "overdub level", controlspec.new(0, 1, "lin", 0, 0.8), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-  params:set_action("dub_level", function() set_rec() end)
+  params:set_action("dub_level", function() set_rec() page_redraw(1) end)
 
-  params:add_group("splice_params", "splices", 12)
+  params:add_group("splice_params", "splices", 17)
 
-  params:add_control("splice_select", "organize [relative pos]", controlspec.new(0, 1, "lin", 0, 0, ""))
-  params:set_action("splice_select", function(val) select_splice(val) end)
+  params:add_separator("splice_markers_params", "markers")
 
-  params:add_binary("add_splice_param", "> add splice", "trigger", 0)
+  params:add_binary("add_splice_param", "> add splice marker", "trigger", 0)
   params:set_action("add_splice_param", function() add_splice() end)
 
-  params:add_binary("remove_splice_param", "> remove splice", "trigger", 0)
-  params:set_action("remove_splice_param", function() remove_splice()  end)
+  params:add_binary("remove_splice_param", "> remove splice marker", "trigger", 0)
+  params:set_action("remove_splice_param", function() remove_splice() end)
+
+  params:add_trigger("clear_markers", "> !! clear all markers !!")
+  params:set_action("clear_markers", function() init_reel(splice[#splice].e - 1) end)
+
+  params:add_separator("splice_organize_params", "organize")
+
+  params:add_control("splice_select", "select splice", controlspec.new(0, 1, "lin", 0, 0, ""), function() return active_splice end)
+  params:set_action("splice_select", function(val) select_splice(val) end)
 
   params:add_binary("next_splice_param", "> next splice", "trigger", 0)
   params:set_action("next_splice_param", function() set_active_splice(1) end)
@@ -1155,23 +1277,26 @@ function init()
   params:add_binary("rand_splice_param", "> random splice", "trigger", 0)
   params:set_action("rand_splice_param", function() set_random_splice() end)
 
-  params:add_binary("flip_splice_param", "> reverse splice", "trigger", 0)
+  params:add_separator("splice_audio_params", "audio")
+
+  params:add_file("append_file", "> select file...", "")
+  params:set_action("append_file", function(path) filename_append = path end)
+
+  params:add_trigger("add_audio", "...and append to reel >>")
+  params:set_action("add_audio", function() load_splice() params:set("append_file", "") end)
+
+  params:add_binary("flip_splice_param", "> reverse active splice", "trigger", 0)
   params:set_action("flip_splice_param", function() flip_splice() end)
-  params:hide("flip_splice_param")
 
-  params:add_trigger("reduce_gain", "> reduce gain...")
+  params:add_trigger("reduce_gain", "> reduce gain [-1bB]")
   params:set_action("reduce_gain", function() gain_reduction() end)
-  params:hide("reduce_gain")
 
-  params:add_control("reduction_level", "> ...by", controlspec.new(0, 1, "lin", 0, 0), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
+  params:add_control("reduction_level", "...by", controlspec.new(0, 0.7, "lin", 0, 0.7), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:hide("reduction_level")
 
   params:add_separator("splice_danger_zone", "danger zone")
 
-  params:add_trigger("clear_markers", "> clear all markers !!!")
-  params:set_action("clear_markers", function() init_reel(splice[#splice].e - 1) end)
-
-  params:add_trigger("clear_splice", "> delete active splice !!!")
+  params:add_trigger("clear_splice", "> !! delete active splice !!")
   params:set_action("clear_splice", function() delete_splice() end)
 
   -- voice params
@@ -1180,16 +1305,16 @@ function init()
   params:add_group("global_voice_params", "all", 5)
 
   params:add_control("global_level", "level", controlspec.new(0, 1, "lin", 0, 1), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-  params:set_action("global_level", function(x) glb_level = x set_levels() end)
+  params:set_action("global_level", function(x) glb_level = x set_levels() page_redraw(3) end)
 
   params:add_control("global_pan", "pan", controlspec.new(-1, 1, "lin", 0, 1, ""), function(param) return (round_form(util.linlin(-1, 1, -100, 100, param:get()), 1, "%")) end)
-  params:set_action("global_pan", function(x) glb_pan = x set_panning() end)
+  params:set_action("global_pan", function(x) glb_pan = x set_panning() page_redraw(3) end)
 
-  params:add_control("global_cutoff", "filter cutoff", controlspec.new(20, 18000, 'exp', 1, 18000, "Hz"))
-  params:set_action("global_cutoff", function(x) set_cutoff(x) end)
+  params:add_number("global_cutoff", "cutoff", -1, 1, 0, function() return delta_viz_fc end)
+  params:set_action("global_cutoff", function(d) if d ~= 0 then set_cutoff(d) end page_redraw(3) end)
 
-  params:add_control("global_filter_q", "filter q", controlspec.new(0.1, 4.0, 'exp', 0.01, 2.0, ""))
-  params:set_action("global_filter_q", function(x) set_filter_q(x) end)
+  params:add_number("global_filter_q", "filter q", -1, 1, 0, function() return delta_viz_fq end)
+  params:set_action("global_filter_q", function(d) if d ~= 0 then set_filter_q(d) end page_redraw(3) end)
 
   params:add_option("global_filter_type", "filter type", {"low pass", "high pass", "band pass", "band reject", "off"}, 1)
   params:set_action("global_filter_type", function(x) for i = 1, GENE_NUM do params:set("filter_type"..i, x) end end)
@@ -1200,17 +1325,17 @@ function init()
   for i = 1, GENE_NUM do
     params:add_separator("voice_"..i.."_params","playhead "..gene_id[i])
 
-    params:add_control("level"..i, "level", controlspec.new(0, 1, "lin", 0, 0.5), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-    params:set_action("level"..i, function(x) voice[i].level = x set_levels() end)
+    params:add_control("level"..i, "level", controlspec.new(0, 1, "lin", 0, 1), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
+    params:set_action("level"..i, function(x) voice[i].level = x set_levels() page_redraw(3) end)
 
     params:add_control("pan"..i, "pan", controlspec.new(-1, 1, "lin", 0, 0, ""))
-    params:set_action("pan"..i, function(x) voice[i].pan = x set_panning() end)
+    params:set_action("pan"..i, function(x) voice[i].pan = x set_panning() page_redraw(3) end)
 
     params:add_control("cutoff"..i, "filter cutoff", controlspec.new(20, 18000, 'exp', 1, 18000, "Hz"))
-    params:set_action("cutoff"..i, function(x) voice[i].fc = x softcut.post_filter_fc(i, x) end)
+    params:set_action("cutoff"..i, function(x) voice[i].fc = x softcut.post_filter_fc(i, x) page_redraw(3) end)
 
     params:add_control("filter_q"..i, "filter q", controlspec.new(0.1, 4.0, 'exp', 0.01, 2.0, ""))
-    params:set_action("filter_q"..i, function(x) voice[i].fq = x softcut.post_filter_rq(i, x) end)
+    params:set_action("filter_q"..i, function(x) voice[i].fq = x softcut.post_filter_rq(i, x) page_redraw(3) end)
 
     params:add_option("filter_type"..i, "filter type", {"low pass", "high pass", "band pass", "band reject", "off"}, 1)
     params:set_action("filter_type"..i, function(x) select_filter(i, x) end)
@@ -1261,19 +1386,18 @@ function init()
   params:set_action("tape_transport", function(mode) gbl_rate_slew = options.rate_slew[mode] set_rate_slew(mode) end)
 
   params:add_control("varispeed", "varispeed", controlspec.new(-4, 4, "lin", 0, 1), function(param) return (round_form(util.linlin(-4, 4, -400, 400, param:get()), 1, "%")) end)
-  params:set_action("varispeed", function(val) voice_rate = val set_rate() end)
+  params:set_action("varispeed", function(val) voice_rate = val set_rate() page_redraw(2) end)
 
   params:add_option("scale", "scale", options.scale, 1)
-  params:set_action("scale", function() end)
 
   params:add_control("slide", "slide", controlspec.new(0, 1, "lin", 0, 0), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-  params:set_action("slide", function() set_loops() end)
+  params:set_action("slide", function() set_loops() page_redraw(2) end)
 
   params:add_control("gene_size", "size", controlspec.new(0, 1, "lin", 0, 1), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-  params:set_action("gene_size", function() set_loops() end)
+  params:set_action("gene_size", function() set_loops() page_redraw(2) end)
 
   params:add_control("morph", "morph", controlspec.new(0, 1, "lin", 0, 0), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-  params:set_action("morph", function() set_loops() reset_morph_params() end)
+  params:set_action("morph", function() set_loops() reset_morph_params() page_redraw(2) end)
 
   params:add_option("morph_mode", "morph mode", {"free", "clocked"}, 1)
 
@@ -1291,51 +1415,9 @@ function init()
   params:add_option("randomize_rate", "rate @morph > 80", {"off", "on"}, 2)
 
   params:add_binary("morph_freez", "> freeze values", "toggle", 0)
-  params:set_action("morph_freez", function(x) morph_freeze = x == 1 and true or false end)
+  params:set_action("morph_freez", function(x) morph_freeze = x == 1 and true or false page_redraw(2) end)
 
-  -- lfo params
-  params:add_separator("modulation", "modulation")
-
-  params:add_group("level_lfos", "level lfos", 15 * (GENE_NUM + 1))
-  local level_lfo = {}
-  for i = 1, GENE_NUM + 1 do
-    level_lfo[i] = _lfos:add{min = 0, max = 1}
-    level_lfo[i]:add_params("level_lfo"..i, "playhead "..gene_id[i].." level")
-    level_lfo[i]:set("action", function(scaled, raw) params:set("level"..i, scaled) page_redraw(3) end)
-  end
-
-  params:add_group("pan_lfos", "pan lfos", 15 * (GENE_NUM + 1))
-  local pan_lfo = {}
-  for i = 1, GENE_NUM + 1 do
-    pan_lfo[i] = _lfos:add{min = -1, max = 1, baseline = "center"}
-    pan_lfo[i]:add_params("pan_lfo"..i, "playhead "..gene_id[i].." pan")
-    pan_lfo[i]:set("action", function(scaled, raw) params:set("pan"..i, scaled) page_redraw(3) end)
-  end
-
-  params:add_group("cutoff_lfos", "cutoff lfos", 15 * (GENE_NUM + 1))
-  local cutoff_lfo = {}
-  for i = 1, GENE_NUM + 1 do
-    cutoff_lfo[i] = _lfos:add{min = 20, max = 18000, baseline = "center"}
-    cutoff_lfo[i]:add_params("cutoff_lfo"..i, "playhead "..gene_id[i].." cutoff")
-    cutoff_lfo[i]:set("action", function(scaled, raw) params:set("cutoff"..i, scaled) page_redraw(3) end)
-  end
-
-  local varispeed_lfo = _lfos:add{min = -4, max = 4, baseline = "center"}
-  varispeed_lfo:add_params("varispeed_lfo", "varispeed", "varispeed lfo")
-  varispeed_lfo:set("action", function(scaled, raw) params:set("varispeed", scaled) page_redraw(2) end)
-
-  local slide_lfo = _lfos:add{min = 0, max = 1}
-  slide_lfo:add_params("slide_lfo", "slide", "slide lfo")
-  slide_lfo:set("action", function(scaled, raw) params:set("slide", scaled) page_redraw(2) end)
-
-  local gene_size_lfo = _lfos:add{min = 0, max = 1}
-  gene_size_lfo:add_params("gene_size_lfo", "size", "size lfo")
-  gene_size_lfo:set("action", function(scaled, raw) params:set("gene_size", scaled) page_redraw(2) end)
-
-  local morph_lfo = _lfos:add{min = 0, max = 1}
-  morph_lfo:add_params("morph_lfo", "morph", "morph lfo")
-  morph_lfo:set("action", function(scaled, raw) params:set("morph", scaled) page_redraw(2) end)
-
+ 
   -- init softcut settings
   for i = 1, GENE_NUM do -- genes 1 - 4
     softcut.enable(i, 1)
@@ -1392,8 +1474,8 @@ function init()
     softcut.rate_slew_time(i, 0)
     softcut.rate(i, 1)
 
-    softcut.post_filter_dry(i, 0)
-    softcut.post_filter_lp(i, 1)
+    softcut.post_filter_dry(i, 1)
+    softcut.post_filter_lp(i, 0)
     softcut.post_filter_fc(i, 20000)
     softcut.post_filter_rq(i, 4)
 
@@ -1438,12 +1520,12 @@ function init()
       -- load sesh data
       reel_data = tab.load(norns.state.data.."pset_data/"..number.."/"..pset_id.."_reel.data")
       -- insert data
-      active_splice = reel_data.active
-      splice = {table.unpack(reel_data.splice)}
-      voice = {table.unpack(reel_data.voice)}
       if save_buffer then
         params:set("load_reel", reel_data.path)
       end
+      active_splice = reel_data.active
+      splice = {table.unpack(reel_data.splice)}
+      voice = {table.unpack(reel_data.voice)}
       set_loops()
       set_start_pos()
       clock.run(
@@ -1498,7 +1580,6 @@ function init()
   warbletimer = metro.init(function() make_warble() end, 1/10, -1)
   warbletimer:start()
 
-
   -- clocks
   geneclock = clock.run(step_genes)
   morphclock = clock.run(morph_values)
@@ -1519,8 +1600,12 @@ function init()
     amp_in[ch].time = 0.01
     amp_in[ch].callback = function(val)
       if val > util.dbamp(params:get("rec_threshold")) / 10 then
-        play = true
-        set_start_pos()
+        if not play then
+          play = true
+          set_start_pos()
+        else
+          rec = true
+        end
         set_rec()
         set_levels()
         amp_in[ch]:stop()
@@ -1553,26 +1638,17 @@ function poll_positions(i, pos)
     if pos_counter >= util.round(gene_length, 0.01) * 100 then
       set_start_pos()
     end
+    page_redraw(1)
   end
-
-  -- continuous pos tracking (untested) TODO!
-  if i > 1 and i < 5 and voice[i].s_prev ~= voice[i].s then
-    local new_pos = voice[i].pos_abs + (voice[i].s - voice[1].s)
-    --softcut.position(i, new_pos)
-    voice[i].s_prev = voice[i].s
-  end
-
   -- ensure that recording stops when the rec head reaches the end of the reel.
-  if i == rec_voice and rec and (params:get("rec_dest") == 3 or init_recording) then
-    if voice[rec_voice].pos_abs >= MAX_REEL + 0.8 and not reel_is_full then --  MAX_REEL + 1 you might have to go a bit lower than the softcut.loop_end(rec_voice, end)
+  if i == rec_voice and is_recording and (params:get("rec_dest") == 3 or init_recording) then
+    if voice[rec_voice].pos_abs >= MAX_REEL and not reel_is_full then
       rec = false
       set_rec()
       reel_is_full = true
       print("no more space left, sorry :(")
     end
   end
-  -- redraw screen
-  page_redraw(1)
 end
 
 
@@ -1582,23 +1658,27 @@ function key(n, z)
     shift = z == 1 and true or false
   end
   if pageNum == 1 then
-    if n == 2 and z == 1 then
+    if n == 2 and z == 1 and not shift then
       focus_page1 = 1 - focus_page1
     end
     if focus_page1 == 0 then
-      if n == 3 then
-        if z == 1 then
-          if shift then
-            remove_splice()
-          else
-            if play then
-              add_splice()
-            end
+      if n == 3 and z == 1 then
+        if shift then
+          remove_splice()
+        else
+          if play then
+            add_splice()
           end
         end
       end
     else
-      if n == 3 and z == 1 then
+      if n == 2 and z == 1 then
+        if shift then
+          amp_in[1]:start()
+          amp_in[2]:start()
+          rec_at_threshold = true
+        end
+      elseif n == 3 and z == 1 then
         if shift then
           toggle_recording()
         else
@@ -1607,7 +1687,7 @@ function key(n, z)
       end
     end
   elseif pageNum == 2 then
-    if n == 2 and z == 1 then
+    if n == 2 and z == 1 and not shift then
       focus_page2 = 1 - focus_page2
     end
     if focus_page2 == 0 then
@@ -1673,17 +1753,13 @@ function enc(n, d)
     else
       if n == 2 then
         if shift then
-          params:delta("rec_dest", d) -- TODO: visualize in UX: . : > next to "R"
+          params:delta("rec_dest", d)
         else
-          if params:get("rec_mode") == 1 then
-            params:delta("rec_level", d)
-          else
-            params:delta("sos_level", d)
-          end
+          params:delta("sos_level", d)
         end
       elseif n == 3 then
         if shift then
-          params:delta("rec_mode", d) -- TODO: visualize in UX
+          params:delta("rec_mode", d)
         else
           params:delta("dub_level", d)
         end
@@ -1735,7 +1811,7 @@ end
 
 function redraw()
   screen.clear()
-
+  -- shift indicator
   screen.level(shift and 15 or 0)
   screen.rect(126, 1, 2, 2)
   screen.fill()
@@ -1858,8 +1934,9 @@ function redraw()
     end
 
     -- rec key
-    screen.level(focus_page1 == 1 and 15 or 4)
-    if rec then
+    --screen.level(focus_page1 == 1 and 15 or 4)
+    screen.level(rec_at_threshold and 6 or (focus_page1 == 1 and 15 or 4))
+    if rec or rec_at_threshold then
       screen.rect(3, 30, 17, 13)
       screen.fill()
     end
@@ -1871,8 +1948,21 @@ function redraw()
     screen.move(10, 38)
     screen.text("R")
 
-    -- TODO: add rec_dest icons
-
+    if shift and focus_page1 == 1 then
+      if params:get("rec_dest") == 1 then
+        screen.move(10, 40)
+        screen.text("_")
+      elseif params:get("rec_dest") == 2 then
+        screen.move(8, 38)
+        screen.text("|")
+        screen.move(15, 38)
+        screen.text("|")
+      else
+        screen.move(15, 38)
+        screen.text(">")        
+      end
+    end
+    
     -- play key
     screen.level(focus_page1 == 1 and 15 or 4)
     if play then
@@ -1892,24 +1982,22 @@ function redraw()
     screen.rect(108, 30, 6, 31)
     screen.stroke()
     screen.level(focus_page1 == 1 and 15 or 4)
-    local input_param = params:get("rec_mode") == 1 and params:get("rec_level") or params:get("sos_level")
-    screen.rect(108, 60, 5, -util.linlin(0, 1, 0, 30, input_param))
+    screen.rect(108, 60, 5, -util.linlin(0, 1, 0, 30, params:get("sos_level")))
     screen.fill()
 
-    --TODO: tweek values to make a zebra crossing
-    --[[
     if params:get("rec_mode") == 2 then
       screen.level(0)
-      for i = 1, 14 do
-        screen.move(109, i + 60)
-        screen.line_rel(4, 0)
+      for i = 1, 31, 2 do
+        screen.move(108, i + 28)
+        screen.line_rel(5, 0)
         screen.stroke()
       end
-      screen.level(15)
-      screen.move(108, -util.linlin(0, 1, 0, 30, input_param) + 60)
-      screen.stroke()
     end
-    ]]
+    
+    screen.level(15)
+    screen.move(108, 61 - util.linlin(0, 1, 0, 31, params:get("sos_level")))
+    screen.line_rel(5, 0)
+    screen.stroke()
     
     -- overdub level
     screen.level(15)
@@ -1918,6 +2006,11 @@ function redraw()
     screen.level(focus_page1 == 1 and 15 or 4)
     screen.rect(118, 60, 5, -util.linlin(0, 1, 0, 30, params:get("dub_level")))
     screen.fill()
+    
+    screen.level(15)
+    screen.move(118, 61 - util.linlin(0, 1, 0, 31, params:get("dub_level")))
+    screen.line_rel(5, 0)
+    screen.stroke()
 
   elseif pageNum == 2 then
 
@@ -1927,23 +2020,24 @@ function redraw()
     screen.rect(4, 4, 16, 50)
     screen.stroke()
     screen.level(focus_page2 == 0 and 15 or 4)
-    screen.rect(4, 53, 15, - util.linlin(0, 1, 0, 49  , params:get("morph")))
+    screen.rect(4, 53, 15, - util.linlin(0, 1, 0, 49, params:get("morph")))
     screen.fill()
-    --TODO: tweek. zebra crossing might be nicer!
-    if morph_freeze then
-      screen.level(0)
-      for i = 1, 4 do
-        for j = 1, 10 do
-          screen.rect(1 + i * 4, 1 + j * 5, 1, 1)
-          screen.fill()
-        end
-      end
-    end
-    screen.level(15)
     screen.move(0, 62)
     screen.font_face(1)
     screen.font_size(8)
     screen.text("morph")
+    if morph_freeze then
+      screen.level(0)
+      for i = 1, 24 do
+        screen.move(4, 54 - i * 2) 
+        screen.line_rel(15, 0)
+        screen.stroke()
+      end
+    end
+    screen.level(15)
+    screen.move(4, 54 - util.linlin(0, 1, 0, 50, params:get("morph")))
+    screen.line_rel(15, 0)
+    screen.stroke()
 
     -- gene size
     screen.level(15)
@@ -1956,6 +2050,11 @@ function redraw()
     screen.font_face(1)
     screen.font_size(8)
     screen.text("size")
+    
+    screen.level(15)
+    screen.move(108, 4 + util.linlin(0, 1, 0, 50, params:get("gene_size")))
+    screen.line_rel(15, 0)
+    screen.stroke()
 
     -- varispeed
     screen.level(focus_page2 == 1 and 15 or 4)
@@ -1994,7 +2093,6 @@ function redraw()
   elseif pageNum == 3 then
     local param_name = options.params_view[param_page3 + 1]
     local parameter = options.params[param_page3 + 1]
-    --local voice = focus_page3 == 0 and 1 or 3
     screen.level(15)
     screen.move(64, 34)
     screen.text_center(param_name)
@@ -2042,12 +2140,10 @@ function redraw()
         screen.level(focus_page3 == 0 and 15 or 4)
         screen.rect(8 + off_x, 8, util.explin(20, 18000, 0, 49, voice[i].fc), 15)
         screen.fill()
-        --screen.move(util.explin(20, 18000, 8, 58, params:get(parameter..1)), 8)
       elseif parameter == "filter_q" then
         screen.level(focus_page3 == 0 and 15 or 4)
         screen.rect(58 + off_x, 8, - util.linlin(0.01, 4, 0, 49, voice[i].fq), 15)
         screen.fill()
-        --screen.move(util.linlin(0.01, 4, 8, 58, params:get(parameter..1)), 8)
       end
     end
 
@@ -2086,12 +2182,10 @@ function redraw()
         screen.level(focus_page3 == 1 and 15 or 4)
         screen.rect(8 + off_x, 40, util.explin(20, 18000, 0, 49, voice[i].fc), 15)
         screen.fill()
-        --screen.move(util.explin(20, 18000, 8, 58, params:get(parameter..1)), 8)
       elseif parameter == "filter_q" then
         screen.level(focus_page3 == 1 and 15 or 4)
         screen.rect(58 + off_x, 40, - util.linlin(0.01, 4, 0, 49, voice[i].fq), 15)
         screen.fill()
-        --screen.move(util.linlin(0.01, 4, 8, 58, params:get(parameter..1)), 8)
       end
     end
   end
@@ -2144,11 +2238,9 @@ function a.delta(n, d)
     elseif n == 4 then
       params:delta("morph", d / 20)
     end
-    page_redraw(2)
   else
     local parameter = options.params[param_page3 + 1]
     params:delta(parameter..n, d / 20)
-    page_redraw(3)
   end
 end
 
