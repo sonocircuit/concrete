@@ -1,19 +1,16 @@
 # concrète
 
-virtual tape explorations for norns. ***highly*** inspired by morphogene. not a clone.
-
-- recording levels / s.o.s still have some quirks... experimentation and testing needed
-- crow implementation untested
+virtual tape explorations for norns. ***highly*** inspired by morphogene. not a clone. contains a ghost.
 
 ----
-### quickstart
+## QUICKSTART
 
-go to params > reel > save&load to load audio (48kHz, mono) if stereo, left channel will be loaded into buffer.
+**>>> load audio via params or record to reel.**
 
-norns UI:
+**navigation:**
 
 - **K1** hold: shift
-- **ENC1**: change page
+- **ENC1**: select page
 
 **page 1: tape**
 
@@ -21,14 +18,17 @@ norns UI:
 
   ***playback:***
   - **K2**: toggle playback / if rec on then rec off
-  - **K1** + **K2**: toggle rec --> rec modes under params > reel > recording
-
-  - **ENC2**: rec level
+  - **ENC2**: input/s.o.s level
   - **ENC3**: overdub level
+
+  - **K1** + **K2**: toggle rec --> rec settings under **params > reel > recording** *or:*
+  - **K1** + **ENC2**: rec destination [follow, splice, new splice]
+  - **K1** + **ENC3**: rec mode [input only, s.o.s]
+
 
   ***splices:***
   - **K2**: add splice
-  - **K1** + **K2**: remove splice
+  - **K1** + **K3**: remove splice
   
   - **ENC3**: scrub playhead
   - **ENC3**: select active splice
@@ -55,3 +55,10 @@ norns UI:
   - **K1** + **ENC2**: clamp to scale values --> change scale in params
   - **ENC3**: slide position
 
+**page 3: levels**
+
+- **K2**: change focus [voix1, voix2 / voix3, voix4]
+- **K3**: select parameter [level, pan / cutoff, filter q]
+
+- **ENC2**: change value voix1/voix3
+- **ENC3**: change value voix2/voix3
