@@ -1,4 +1,4 @@
--- concre'te v0.0.1 @sonocircuit
+-- concre'te v0.1.1 @sonocircuit
 -- llllllll.co/t/concrete
 --
 -- virtual tape
@@ -22,9 +22,7 @@
 --
 
 -----------------------------------------------------------------------------------------------------------------------------
--- TODO:
--- review crow implementation (last priority, even post release)
--- revisit LFOs --> matrix mod? adapt lfo lib?
+-- TODO: revisit LFOs --> matrix mod? adapt lfo lib?
 -----------------------------------------------------------------------------------------------------------------------------
 
 local a = arc.connect()
@@ -37,7 +35,7 @@ local mu = require 'musicutil'
 
 -------- variables --------
 local pset_load = false
-local default_pset = 6
+local default_pset = 3
 
 local shift = false
 local pageNum = 1
@@ -195,12 +193,24 @@ function load_splice()
   filename_append = ""
 end
 
+function save_splice(txt)
+  if txt then
+    local start = splice[active_splice].s
+    local length = splice[active_splice].e - splice[active_splice].s
+    util.make_dir(_path.audio .. "concrete/splices")
+    softcut.buffer_write_mono(_path.audio.."concrete/splices/"..txt..".wav", start, length, 1)
+    print("splice saved: " .._path.audio .. "concrete/splices/" .. txt .. ".wav")
+  else
+    print("save cancel")
+  end
+end
+
 function save_reel(txt)
   if txt then
     local length = splice[#splice].e - 1
-    util.make_dir(_path.audio .. "concrete")
-    softcut.buffer_write_mono(_path.audio.."concrete/"..txt..".wav", 1, length, 1)
-    print("file saved: " .._path.audio .. "concrete/" .. txt .. ".wav")
+    util.make_dir(_path.audio .. "concrete/reels")
+    softcut.buffer_write_mono(_path.audio.."concrete/reels/"..txt..".wav", 1, length, 1)
+    print("reel saved: " .._path.audio .. "concrete/reels/" .. txt .. ".wav")
   else
     print("save cancel")
   end
@@ -683,7 +693,11 @@ function set_start_pos()
     softcut.position(rec_voice, voice[1].s)
   end
   for i = 1, 4 do
-    if params:get("crow_out_"..i) ~= 1 then
+    if params:get("crow_out_"..i) == 2 then
+      crow.output[i].action = "{ to(0, 0), to(8, "..gene_length.."), to(0, 0, 'lin') }"
+      crow.output[i]()
+    elseif params:get("crow_out_"..i) == 3 then
+      crow.output[i].action = "pulse(0.02, 8)"
       crow.output[i]()
     end
   end
@@ -1047,51 +1061,34 @@ function crow_rnd_splice(v)
   end
 end
 
-local prev_volts = 0
 function crow_select_splice(v)
-  local volts = util.clamp(v, 1, 5)
-  if v ~= prev_volts then
-    local val = util.linlin(1, 5, 0, 1, volts)
-    select_splice(val)
-    prev_volts = volts
-  end
+  local volts = util.clamp(v, 0, 5)
+  local val = util.linlin(0, 5, 0, 1, volts)
+  select_splice(val)
 end
 
 function crow_varispeed(v)
   local volts = util.round(util.clamp(v, -3, 3), 0.01)
-  if volts ~= prev_volts then
-    local semitone = math.pow(2, volts)
-    params:set("varispeed", semitone)
-    prev_volts = volts
-    print(volts)
-  end
+  local semitone = math.pow(2, volts)
+  params:set("varispeed", semitone)
 end
 
 function crow_slide(v)
-  if v ~= prev_volts then
-    local volts = util.clamp(v, 0, 5)
-    local val = util.linlin(0, 5, 0, 1, volts)
-    params:set("slide", val)
-    prev_volts = volts
-  end
+  local volts = util.clamp(v, 0, 5)
+  local val = util.linlin(0, 5, 0, 1, volts)
+  params:set("slide", val)
 end
 
 function crow_morph(v)
-  if v ~= prev_volts then
-    local volts = util.clamp(v, 0, 5)
-    local val = util.linlin(0, 5, 0, 1, volts)
-    params:set("morph", val)
-    prev_volts = volts
-  end
+  local volts = util.clamp(v, 0, 5)
+  local val = util.linlin(0, 5, 0, 1, volts)
+  params:set("morph", val)
 end
 
 function crow_size(v)
-  if v ~= prev_volts then
-    local volts = util.clamp(v, 0, 5)
-    local val = util.linlin(0, 5, 0, 1, volts)
-    params:set("gene_size", val)
-    prev_volts = volts
-  end
+  local volts = util.clamp(v, 0, 5)
+  local val = util.linlin(0, 5, 1, 0, volts)
+  params:set("gene_size", val)
 end
 
 function set_crow_input(ch, idx)
@@ -1123,8 +1120,8 @@ function set_crow_input(ch, idx)
     crow.input[ch].change = crow_rnd_splice
     crow.input[ch].mode("change", 2.0, 0.25, "rising")
   elseif dst == "select splice [cv]" then
-    crow.input[ch].mode("stream", 0.01)
     crow.input[ch].stream = crow_select_splice
+    crow.input[ch].mode("stream", 0.01)
   elseif dst == "varispeed v/8 [cv]" then
     crow.input[ch].stream = crow_varispeed
     crow.input[ch].mode("stream", 0.01)
@@ -1138,19 +1135,6 @@ function set_crow_input(ch, idx)
     crow.input[ch].stream = crow_morph
     crow.input[ch].mode("stream", 0.01)
   end
-  --print("crow input "..ch.." set to: "..dst)
-end
-
-function set_crow_output(ch, mode)
-    local src = options.crow_output[mode]
-  if src == "none" then
-    crow.output[ch] = "none"
-  elseif src == "gene ramp [cv]" then
-    crow.output[ch].action = "ar("..gene_length..",0, 'lin')"
-  elseif src == "loop reset [trig]" then
-    crow.output[ch].action = "pulse(0.05, 8, 1)"
-  end
-  --print("crow output "..ch.." set to: "..src)
 end
 
 
@@ -1195,7 +1179,6 @@ function init()
 
   for i = 1, 4 do
     params:add_option("crow_out_"..i, "output "..i, options.crow_output, 1)
-    params:set_action("crow_out_"..i, function(mode) set_crow_output(i, mode) end)
   end
   
   -- arc params
@@ -1250,7 +1233,7 @@ function init()
   params:add_control("dub_level", "overdub level", controlspec.new(0, 1, "lin", 0, 0.8), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:set_action("dub_level", function() set_rec() page_redraw(1) end)
 
-  params:add_group("splice_params", "splices", 17)
+  params:add_group("splice_params", "splices", 18)
 
   params:add_separator("splice_markers_params", "markers")
 
@@ -1290,6 +1273,9 @@ function init()
 
   params:add_trigger("reduce_gain", "> reduce gain [-1bB]")
   params:set_action("reduce_gain", function() gain_reduction() end)
+
+  params:add_trigger("save_splice", "< save splice")
+  params:set_action("save_splice", function() textentry.enter(save_splice) end)
 
   params:add_control("reduction_level", "...by", controlspec.new(0, 0.7, "lin", 0, 0.7), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:hide("reduction_level")
@@ -1417,6 +1403,53 @@ function init()
   params:add_binary("morph_freez", "> freeze values", "toggle", 0)
   params:set_action("morph_freez", function(x) morph_freeze = x == 1 and true or false page_redraw(2) end)
 
+  --[[
+ -- lfo params
+ params:add_separator("modulation", "modulation")
+
+ local gene_id = {"[one]", "[two]", "[three]", "[four]", "[ghost]"}
+ params:add_group("level_lfos", "level lfos", 15 * (GENE_NUM + 1))
+ local level_lfo = {}
+ for i = 1, GENE_NUM + 1 do
+   level_lfo[i] = _lfos:add{min = 0, max = 1}
+   level_lfo[i]:add_params("level_lfo"..i, "playhead "..gene_id[i].." level")
+   level_lfo[i]:set("action", function(scaled, raw) params:set("level"..i, scaled) end)
+ end
+
+ params:add_group("pan_lfos", "pan lfos", 15 * (GENE_NUM + 1))
+ local pan_lfo = {}
+ for i = 1, GENE_NUM + 1 do
+   pan_lfo[i] = _lfos:add{min = -1, max = 1}
+   pan_lfo[i]:add_params("pan_lfo"..i, "playhead "..gene_id[i].." pan")
+   pan_lfo[i]:set("action", function(scaled, raw) params:set("pan"..i, scaled) end)
+ end
+
+ params:add_group("cutoff_lfos", "cutoff lfos", 15 * (GENE_NUM + 1))
+ local cutoff_lfo = {}
+ for i = 1, GENE_NUM + 1 do
+   cutoff_lfo[i] = _lfos:add{min = 20, max = 18000}
+   cutoff_lfo[i]:add_params("cutoff_lfo"..i, "playhead "..gene_id[i].." cutoff")
+   cutoff_lfo[i]:set("action", function(scaled, raw) params:set("cutoff"..i, scaled) end)
+ end
+
+ local varispeed_lfo = _lfos:add{min = -4, max = 4}
+ varispeed_lfo:add_params("varispeed_lfo", "varispeed", "varispeed lfo")
+ varispeed_lfo:set("action", function(scaled, raw) params:set("varispeed", scaled) end)
+
+ local slide_lfo = _lfos:add{min = 0, max = 1}
+ slide_lfo:add_params("slide_lfo", "slide", "slide lfo")
+ slide_lfo:set("action", function(scaled, raw) params:set("slide", scaled) end)
+
+ local gene_size_lfo = _lfos:add{min = 0, max = 1}
+ gene_size_lfo:add_params("gene_size_lfo", "size", "size lfo")
+ gene_size_lfo:set("action", function(scaled, raw) params:set("gene_size", scaled) end)
+
+ local morph_lfo = _lfos:add{min = 0, max = 1}
+ morph_lfo:add_params("morph_lfo", "morph", "morph lfo")
+ morph_lfo:set("action", function(scaled, raw) params:set("morph", scaled) end)
+  ]]
+ 
+
  
   -- init softcut settings
   for i = 1, GENE_NUM do -- genes 1 - 4
@@ -1493,17 +1526,14 @@ function init()
     -- make directories
     os.execute("mkdir -p "..norns.state.data.."pset_data/"..number.."/")
     os.execute("mkdir -p ".._path.audio.."concrete/")
-    -- save buffer content
-    if save_buffer then
-      local length = splice[#splice].e - 1
-      softcut.buffer_write_mono(_path.audio.."concrete/"..name..".wav", 1, length, 1)
-    end
     -- store data in one big table
     local reel_data = {}
     reel_data.active = active_splice
     reel_data.splice = {table.unpack(splice)}
     reel_data.voice = {table.unpack(voice)}
     if save_buffer then
+      local length = splice[#splice].e - 1
+      softcut.buffer_write_mono(_path.audio.."concrete/"..name..".wav", 1, length, 1)
       reel_data.path = _path.audio.."concrete/"..name..".wav"
     end
     -- and save the chunk
@@ -1517,25 +1547,31 @@ function init()
       io.input(loaded_file)
       local pset_id = string.sub(io.read(), 4, -1)
       io.close(loaded_file)
-      -- load sesh data
-      reel_data = tab.load(norns.state.data.."pset_data/"..number.."/"..pset_id.."_reel.data")
-      -- insert data
+       -- load sesh data
+      local reel_data = tab.load(norns.state.data.."pset_data/"..number.."/"..pset_id.."_reel.data")
       if save_buffer then
         params:set("load_reel", reel_data.path)
       end
-      active_splice = reel_data.active
-      splice = {table.unpack(reel_data.splice)}
-      voice = {table.unpack(reel_data.voice)}
-      set_loops()
-      set_start_pos()
       clock.run(
         function()
-          clock.sleep(0.1)
-          waveviz_splice = true
-          softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
+          clock.sleep(0.4)
+          active_splice = reel_data.active
+          splice = {table.unpack(reel_data.splice)}
+          voice = {table.unpack(reel_data.voice)}
+          set_loops()
+          set_start_pos()
+          waveviz_reel = true
+          softcut.render_buffer(1, 1, splice[#splice].e - 1, 128)
+          clock.run(
+            function()
+              clock.sleep(0.1)
+              waveviz_splice = true
+              softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
+            end
+          )
+          print("finished reading pset:'"..pset_id.."'")
         end
       )
-      print("finished reading pset:'"..pset_id.."'")
     end
   end
 
