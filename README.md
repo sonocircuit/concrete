@@ -41,15 +41,14 @@ virtual tape explorations for norns. ***highly*** inspired by morphogene. not a 
 - **K2**: change focus [morph, size / varispeed, slide]
 
   ***moprh, size:***
-  - **K2**: temp max. morph
-  - **K1** + **K2**: freeze randomized values (morph > 75)
+  - **K3**: temp max. morph
+  - **K1** + **K3**: freeze randomized values (morph > 75)
 
   - **ENC2**: morph amount
   - **ENC3**: loop size
 
   ***varispeed, slide:***
-  - **K2**: toggle playback direction
-  - **K1** + **K2**: speed envelope (under construction)
+  - **K3**: toggle playback direction
   
   - **ENC2**: playback speed 
   - **K1** + **ENC2**: clamp to scale values --> change scale in params
