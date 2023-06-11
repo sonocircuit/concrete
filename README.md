@@ -1,6 +1,6 @@
 # concrète
 
-virtual tape explorations for norns. ***highly*** inspired by morphogene. not a clone. contains a ghost.
+virtual tape explorations for norns. ***highly*** inspired by morphagene. not a clone. contains a ghost.
 
 ----
 ## QUICKSTART
