@@ -1,4 +1,4 @@
--- concre'te v0.1.1 @sonocircuit
+-- concre'te v0.1.4 @sonocircuit
 -- llllllll.co/t/concrete
 --
 -- virtual tape
@@ -22,20 +22,22 @@
 --
 
 -----------------------------------------------------------------------------------------------------------------------------
--- TODO: revisit LFOs --> matrix mod? adapt lfo lib?
+-- TODO 1: revisit LFOs --> matrix mod? adapt lfo lib?
+-- TODO 2: fix crow implementation and reactivate
 -----------------------------------------------------------------------------------------------------------------------------
 
 local a = arc.connect()
+local g = grid.connect()
 local m = midi.connect()
 
-local fileselect = require 'fileselect'
 local textentry = require 'textentry'
 local mu = require 'musicutil'
---local _lfos = require 'lfo'
+
+--local _lfos = include 'lib/concrete_lfo'
 
 -------- variables --------
 local pset_load = false
-local default_pset = 3
+local default_pset = 1
 
 local shift = false
 local pageNum = 1
@@ -43,6 +45,7 @@ local focus_page1 = 1
 local focus_page2 = 0
 local focus_page3 = 0
 local param_page3 = 0
+local focus_page4 = 0
 local active_splice = 1
 local prev_splice = 1
 local play = false
@@ -70,7 +73,7 @@ local init_recording = true
 local waveviz_reel = false
 local waveviz_splice = false
 local save_buffer = false
-local filename_append = ""
+local filename_reel = ""
 local MAX_REEL = 320
 local GENE_NUM = 4
 local ghost_voice = 5
@@ -78,13 +81,22 @@ local rec_voice = 6
 local rec_at_threshold = false
 local midi_channel = 1
 local midi_root = 60
+local key_root = -21
 local crow_is = false
+local dirtygrid = false
 
 -- variables for arc
 local arc_is = false
 local arc_off = 0
 local arc_enc1_count = 0
 local arc_vs_sens = 100
+
+-- variables for grid
+local g_pos_reset = false
+local g_rec_mode = false
+local g_rec_dest = false
+local g_rec_speed = false
+local g_interval = 4
 
 -- variables for warble
 local tau = math.pi * 2
@@ -121,10 +133,11 @@ local oct2 = math.pow(2, 24/12) -- speed == 4
 -------- tables --------
 local options = {}
 options.scale = {"oct", "oct+p4", "oct+p5", "oct+p4+p5"}
-options.crow_input = {"none", "play [trig]", "play [gate]", "rec [trig]", "rec [gate]", "add splice [trig]", "next splice [trig]", "prev splice [trig]", "random splice [trig]", "select splice [cv]", "varispeed v/8 [cv]", "slide [cv]", "size [cv]", "morph [cv]"}
+options.crow_input = {"none", "play [trig]", "play [gate]", "restart [trig]", "rec [trig]", "rec [gate]", "add splice [trig]", "next splice [trig]", "prev splice [trig]", "random splice [trig]", "select splice [cv]", "varispeed v/8 [cv]", "slide [cv]", "size [cv]", "morph [cv]"}
 options.crow_output = {"none", "gene ramp [cv]", "loop reset [trig]"}
 options.clock_tempo = {"2", "1", "1/2", "1/4", "3/16", "1/6", "1/8", "3/32", "1/12", "1/16","1/32"}
 options.clock_value = {2, 1, 1/2, 1/4, 3/16, 1/6, 1/8, 3/32, 1/12, 1/16, 1/32}
+options.params_gbl = {"global_level", "global_pan", "global_cutoff", "global_filter_q"}
 options.params = {"level", "pan", "cutoff", "filter_q"}
 options.params_view = {"level", "pan", "cutoff", "filter q"}
 options.rate_slew = {0, 0.05, 0.1, 0.2, 0.5}
@@ -147,11 +160,13 @@ for i = 1, 6 do
   voice[i] = {}
   voice[i].active = true
   voice[i].s = 1
-  voice[i].level = 0
+  voice[i].level = 1
+  voice[i].prev_level = 1
   voice[i].pan = 0
   voice[i].fc = 18000
   voice[i].fq = 2
   voice[i].rate_mod = 1
+  voice[i].trsp_value = 1
   voice[i].pos_abs = 1
   voice[i].pos_rel = 0
 end
@@ -161,6 +176,7 @@ function load_reel(path)
   if path ~= "cancel" and path ~= "" then
     local ch, len = audio.file_info(path)
     if ch > 0 and len > 0 then
+      filename_reel = path
       softcut.buffer_clear()
       softcut.buffer_read_mono(path, 0, 1, -1, 1, 1, 0, 1)
       local l = math.min(len / 48000, MAX_REEL)
@@ -169,10 +185,12 @@ function load_reel(path)
     else
       print("not a sound file")
     end
+    params:set("load_reel", "", true)
   end
 end
 
-function load_splice()
+function load_splice(path)
+  local filename_append = path
   local ch, len = audio.file_info(filename_append)
   if ch > 0 and len > 0 then
     if reel_has_audio then
@@ -187,10 +205,10 @@ function load_splice()
       init_reel(l)
       print("splice added: "..filename_append.." is "..l.."s")
     end
+    params:set("append_file", "")
   else
     print("not a sound file")
   end
-  filename_append = ""
 end
 
 function save_splice(txt)
@@ -221,8 +239,19 @@ function clear_reel()
   reel_is_full = false
   init_recording = true
   reel_has_audio = false
-  params:set("load_reel", "")
-  init_reel(MAX_REEL)
+  active_splice = 1
+  splice = {}
+  splice[1] = {}
+  splice[1].s = 1
+  splice[1].e = 1 + MAX_REEL
+  splice[1].l = MAX_REEL
+  waveviz_reel = true
+  waveviz_splice = true
+  softcut.render_buffer(1, 1, MAX_REEL, 128)
+  set_loops()
+  set_start_pos()
+  params:set("load_reel", "", true)
+  print("cleared reel")
 end
 
 function init_reel(dur)
@@ -253,6 +282,7 @@ function add_splice(pos)
   set_start_pos()
   waveviz_splice = true
   softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
+  dirtygrid = true
   -- print_markers()
 end
 
@@ -265,6 +295,7 @@ function remove_splice()
     set_start_pos()
     waveviz_splice = true
     softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
+    dirtygrid = true
   end
   --print_markers()
 end
@@ -276,6 +307,7 @@ function append_splice(pos)
   splice[#splice].l = splice[#splice].e - splice[#splice].s
   waveviz_reel = true
   softcut.render_buffer(1, 1, splice[#splice].e - 1, 128)
+  dirtygrid = true
   --print_markers()
 end
 
@@ -342,6 +374,7 @@ function delete_splice(splice_num)
         set_active_splice(0)
       end
     )
+    dirtygrid = true
     --print_markers()
   end
 end
@@ -370,11 +403,9 @@ function flip_splice(splice_num)
 end
 
 function gain_reduction()
-  local preserve = 1 - params:get("reduction_level")
   softcut.buffer_clear_region(splice[active_splice].s, splice[active_splice].l, 0.01, 0.794)
   waveviz_reel = true
   softcut.render_buffer(1, 1, splice[#splice].e - 1, 128)
-  --print("gain reduced by -1dB")
 end
 
 function set_active_splice(inc)
@@ -394,6 +425,7 @@ function set_active_splice(inc)
       end
     end
   )
+  dirtygrid = true
 end
 
 function set_random_splice()
@@ -628,7 +660,7 @@ end
 
 function set_rate()
   for i = 1, GENE_NUM do
-    local rate = voice_rate * voice[i].rate_mod
+    local rate = voice_rate * voice[i].rate_mod * voice[i].trsp_value
     softcut.rate(i, rate)
   end
   if params:get("rec_rate") == 1 then
@@ -692,6 +724,8 @@ function set_start_pos()
   if params:get("rec_dest") == 1 then
     softcut.position(rec_voice, voice[1].s)
   end
+
+  --[[
   for i = 1, 4 do
     if params:get("crow_out_"..i) == 2 then
       crow.output[i].action = "{ to(0, 0), to(8, "..gene_length.."), to(0, 0, 'lin') }"
@@ -701,6 +735,8 @@ function set_start_pos()
       crow.output[i]()
     end
   end
+  ]]
+
   set_levels()
   page_redraw(1)
 end
@@ -899,7 +935,7 @@ function summon_ghost()
     local ghost_level = voice[ghost_voice].level * glb_level
     softcut.level(ghost_voice, ghost_level)
   end
-  -- ghost gone
+  -- ghost vanish
   if math.random(100) <= params:get("ghost_duration") then
     voice[ghost_voice].active = false
     local ghost_level = 0
@@ -999,144 +1035,220 @@ function midi_disconnect()
   )
 end
 
-m.event = function(data)
+function midi_events(data)
   local msg = midi.to_msg(data)
   if msg.type == "note_on" and msg.ch == midi_channel then
     local semitone = math.pow(2, (msg.note - midi_root) / 12)
-    params:set("varispeed", semitone)
+    for i = 1, 4 do
+      voice[i].trsp_value = semitone
+      if params:get("adsr_active") == 2 then
+        env_gate_on(i)
+      end
+    end
+    set_rate()
+  elseif msg.type == "note_off" and msg.ch == midi_channel then
+    if params:get("adsr_active") == 2 then
+      for i = 1, 4 do
+        env_gate_off(i)
+      end
+    end
+  end
+end
+
+function set_midi_event_callback()
+  midi.cleanup()
+  m.event = midi_events
+end
+
+-- envelopes
+local env = {}
+env.attack = 0
+env.decay = 0
+env.sustain = 1
+env.release = 0
+for i = 1, 4 do
+  env[i] = {}
+  env[i].gate = false
+  env[i].trig = false
+  env[i].a_is_running = false
+  env[i].d_is_running = false
+  env[i].r_is_running = false
+  env[i].max_value = 1
+  env[i].init_value = 0
+  env[i].prev_value = 0
+  env[i].count = 0
+  env[i].direction = 0
+  env[i].id = "env "..i
+end
+
+function env_gate_on(i)
+  env_get_value(i)
+  env[i].gate = true
+  env[i].a_is_running = true
+  env[i].count = 0
+  env[i].direction = 1
+  --print("gate on")
+end
+
+function env_gate_off(i)
+  env_get_value(i)
+  env[i].gate = false
+  env[i].a_is_running = false
+  env[i].d_is_running = false
+  env[i].r_is_running = true
+  env[i].count = 0
+  env[i].direction = 1
+  --print("gate off")
+end
+
+function env_increment(i, d)
+  params:delta("level"..i, d * 100)
+  --if view == vENV then dirtygrid = true end
+end
+
+function env_set_value(i, val)
+  params:set("level"..i, val)
+end
+
+function env_get_value(i)
+  env[i].prev_value = params:get("level"..i)
+end
+
+function env_stop(i)
+
+end
+
+--- make envelope
+function env_run()
+  while true do
+    clock.sleep(1/10)
+    for i = 1, 4 do
+      env[i].count = env[i].count + env[i].direction
+      if env[i].gate then
+        if env[i].a_is_running then
+          if env.attack == 0 then
+            env_set_value(i, env[i].max_value)
+            env_get_value(i)
+            env[i].count = 0
+            env[i].a_is_running = false
+            env[i].d_is_running = true
+          else
+            local d = (env[i].max_value - env[i].prev_value) / env.attack
+            env_increment(i, d)
+            if env[i].count >= env.attack then
+              env_get_value(i)
+              env[i].count = 0
+              env[i].a_is_running = false
+              env[i].d_is_running = true
+            end
+          end
+        end
+        if env[i].d_is_running then
+          local s = env[i].max_value * env.sustain
+          if env.decay == 0 then
+            env[i].direction = 0
+            env[i].count = 0
+            env[i].d_is_running = false
+            env_set_value(i, s)
+            env_get_value(i)
+          else
+            local d = -(env[i].prev_value - s) / env.decay
+            env_increment(i, d)
+            if env[i].count >= env.decay then
+              env[i].direction = 0
+              env[i].count = 0
+              env[i].d_is_running = false
+              env_set_value(i, s)
+              env_get_value(i)
+            end
+          end
+        end
+      else
+        if env[i].r_is_running then
+          if env.release == 0 then
+            env[i].direction = 0
+            env[i].count = 0
+            env[i].r_is_running = false
+            env_set_value(i, env[i].init_value)
+            env_stop(i)
+          else
+            local d = -(env[i].prev_value - env[i].init_value) / env.release
+            env_increment(i, d)
+            if env[i].count >= env.release then
+              env[i].direction = 0
+              env[i].count = 0
+              env[i].r_is_running = false
+              env[i].trig = false
+              env_set_value(i, env[i].init_value)
+              env_stop(i)
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+function init_envelope()
+  for i = 1, 4 do
+    if params:get("adsr_active") == 2 then
+      env[i].max_value = params:get("level"..i)
+      voice[i].prev_level = voice[i].level
+      params:set("level"..i, env[i].init_value)
+    else
+      env[i].gate = false
+      env[i].a_is_running = false
+      env[i].d_is_running = false
+      env[i].r_is_running = false
+      env[i].count = 0
+      env[i].direction = 1
+      params:set("level"..i, voice[i].prev_level)
+    end
+  end
+  page_redraw(3)
+end
+
+function clamp_env_levels(i)
+  if env[i].init_value >= env[i].max_value then
+    params:set(i.."adsr_init", env[i].max_value)
+  end
+  if env.sustain >= env[i].max_value then
+    params:set(i.."adsr_sustain", env[i].max_value)
+  end
+  if env[i].init_value >= env.sustain then
+    params:set(i.."adsr_sustain", env[i].init_value)
   end
 end
 
 
+--[[
 -------- crow --------
-function crow_play_trig(v)
-  if v then
-    set_play()
-  end
+function crow_in_change_1(v)
+  print("channel 1")
+  print(v)
 end
 
-function crow_play_gate(v)
-  if v and not play then
-    set_play()
-  elseif not v and play then
-    set_play()
-  end
+function crow_in_change_2(v)
+  print("channel 2")
+  print(v)
 end
 
-function crow_rec_trig(v)
-  if v then
-    toggle_recording()
-  end
+function crow_in_stream(v)
+
 end
 
-function crow_rec_gate(v)
-  if v and not rec then
-    toggle_recording()
-  elseif not v and rec then
-    toggle_recording()
-  end
-end
-
-function crow_add_splice(v)
-  if v then
-    add_splice()
-  end
-end
-
-function crow_inc_splice(v)
-  if v then
-    set_active_splice(1)
-  end
-end
-
-function crow_dec_splice(v)
-  if v then
-    set_active_splice(-1)
-  end
-end
-
-function crow_rnd_splice(v)
-  if v then
-    set_random_splice()
-  end
-end
-
-function crow_select_splice(v)
-  local volts = util.clamp(v, 0, 5)
-  local val = util.linlin(0, 5, 0, 1, volts)
-  select_splice(val)
-end
-
-function crow_varispeed(v)
-  local volts = util.round(util.clamp(v, -3, 3), 0.01)
-  local semitone = math.pow(2, volts)
-  params:set("varispeed", semitone)
-end
-
-function crow_slide(v)
-  local volts = util.clamp(v, 0, 5)
-  local val = util.linlin(0, 5, 0, 1, volts)
-  params:set("slide", val)
-end
-
-function crow_morph(v)
-  local volts = util.clamp(v, 0, 5)
-  local val = util.linlin(0, 5, 0, 1, volts)
-  params:set("morph", val)
-end
-
-function crow_size(v)
-  local volts = util.clamp(v, 0, 5)
-  local val = util.linlin(0, 5, 1, 0, volts)
-  params:set("gene_size", val)
-end
-
-function set_crow_input(ch, idx)
-  local dst = options.crow_input[idx]
-  if dst == "none" then
+function set_crow_input(ch, mode)
+  if mode == 1 then
     crow.input[ch].mode("none")
-  elseif dst == "play [trig]" then
-    crow.input[ch].change = crow_play_trig
-    crow.input[ch].mode("change", 2.0, 0.25, "rising")
-  elseif dst == "play [gate]" then
-    crow.input[ch].change = crow_play_gate
-    crow.input[ch].mode("change", 2.0, 0.25, "both")
-  elseif dst == "rec [trig]" then
-    crow.input[ch].change = crow_rec_trig
-    crow.input[ch].mode("change", 2.0, 0.25, "rising")
-  elseif dst == "rec [gate]" then
-    crow.input[ch].change = crow_rec_gate
-    crow.input[ch].mode("change", 2.0, 0.25, "both")
-  elseif dst == "add splice [trig]" then
-    crow.input[ch].change = crow_add_splice
-    crow.input[ch].mode("change", 2.0, 0.25, "rising")
-  elseif dst == "next splice [trig]" then
-    crow.input[ch].change = crow_inc_splice
-    crow.input[ch].mode("change", 2.0, 0.25, "rising")
-  elseif dst == "prev splice [trig]" then
-    crow.input[ch].change = crow_dec_splice
-    crow.input[ch].mode("change", 2.0, 0.25, "rising")
-  elseif dst == "random splice [trig]" then
-    crow.input[ch].change = crow_rnd_splice
-    crow.input[ch].mode("change", 2.0, 0.25, "rising")
-  elseif dst == "select splice [cv]" then
-    crow.input[ch].stream = crow_select_splice
-    crow.input[ch].mode("stream", 0.01)
-  elseif dst == "varispeed v/8 [cv]" then
-    crow.input[ch].stream = crow_varispeed
-    crow.input[ch].mode("stream", 0.01)
-  elseif dst == "slide [cv]" then
-    crow.input[ch].stream = crow_slide
-    crow.input[ch].mode("stream", 0.01)
-  elseif dst == "size [cv]" then
-    crow.input[ch].stream = crow_size
-    crow.input[ch].mode("stream", 0.01)
-  elseif dst == "morph [cv]" then
-    crow.input[ch].stream = crow_morph
+  elseif mode > 1 and mode < 10 then
+    crow.input[ch].mode("change", 2.0, 0.2, "both")
+    crow.input[ch].change = ch == 1 and crow_in_change_1 or crow_in_change_2
+  elseif mode > 9 then
+    crow.input[ch].stream = crow_in_stream
     crow.input[ch].mode("stream", 0.01)
   end
 end
-
+]]
 
 -------- helpers --------
 function round_form(param, quant, form)
@@ -1156,19 +1268,10 @@ end
 
 -------- init --------
 function init()
-  -- MIDI params
+
   build_midi_device_list()
-  params:add_group("midi_params",  "MIDI", 3)
 
-  params:add_option("midi_device", "midi device", midi_devices, 1)
-  params:set_action("midi_device", function(val) m = midi.connect(val) end)
-
-  params:add_number("midi_channel", "midi channel", 1, 16, 1)
-  params:set_action("midi_channel", function(val) midi_channel = val end)
-
-  params:add_number("root_note", "root note", 1, 127, 60, function(param) return mu.note_num_to_name(param:get(), true) end)
-  params:set_action("root_note", function(val) midi_root = val end)
-
+  --[[
   -- crow params
   params:add_group("crow_params",  "CROW", 6)
 
@@ -1180,7 +1283,9 @@ function init()
   for i = 1, 4 do
     params:add_option("crow_out_"..i, "output "..i, options.crow_output, 1)
   end
-  
+  ]]
+
+
   -- arc params
   params:add_group("arc_params", "ARC", 2)
 
@@ -1201,7 +1306,7 @@ function init()
   params:add_trigger("save_reel", "< save reel")
   params:set_action("save_reel", function() textentry.enter(save_reel) end)
 
-  params:add_option("save_buffer_pset", "? save reel with pset", {"no", "yes"}, 1)
+  params:add_option("save_buffer_pset", "? save reel with pset", {"no", "yes"}, 2)
   params:set_action("save_buffer_pset", function(x) save_buffer = x == 2 and true or false end)
 
   params:add_trigger("clear_reel", "!! clear and reset reel !!")
@@ -1224,7 +1329,7 @@ function init()
 
   params:add_control("rec_threshold", "threshold", controlspec.new(-40, 6, 'lin', 0, -12, "dB"))
 
-  params:add_control("sos_level", "s.o.s level", controlspec.new(0, 1, "lin", 0, 0), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
+  params:add_control("sos_level", "s.o.s level", controlspec.new(0, 1, "lin", 0, 0.8), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:set_action("sos_level", function(val) sos_signal = val set_levels() page_redraw(1) end)
 
   params:add_control("rec_level", "rec level", controlspec.new(0, 1, "lin", 0, 1), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
@@ -1233,7 +1338,22 @@ function init()
   params:add_control("dub_level", "overdub level", controlspec.new(0, 1, "lin", 0, 0.8), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:set_action("dub_level", function() set_rec() page_redraw(1) end)
 
-  params:add_group("splice_params", "splices", 18)
+  params:add_group("splice_params", "splices", 16)
+
+  params:add_separator("splice_audio_params", "audio")
+
+  params:add_file("append_file", ">> append splice to reel", "")
+  params:set_action("append_file", function(path) load_splice(path) end)
+
+  params:add_trigger("save_splice", "<< save active splice")
+  params:set_action("save_splice", function() textentry.enter(save_splice) end)
+
+  params:add_binary("flip_splice_param", "> reverse active splice", "trigger", 0)
+  params:set_action("flip_splice_param", function() flip_splice() end)
+
+  params:add_trigger("reduce_gain", "> reduce gain [-1bB]")
+  params:set_action("reduce_gain", function() gain_reduction() end)
+  params:hide("reduce_gain")
 
   params:add_separator("splice_markers_params", "markers")
 
@@ -1242,6 +1362,7 @@ function init()
 
   params:add_binary("remove_splice_param", "> remove splice marker", "trigger", 0)
   params:set_action("remove_splice_param", function() remove_splice() end)
+  params:hide("remove_splice_param")
 
   params:add_trigger("clear_markers", "> !! clear all markers !!")
   params:set_action("clear_markers", function() init_reel(splice[#splice].e - 1) end)
@@ -1259,26 +1380,6 @@ function init()
 
   params:add_binary("rand_splice_param", "> random splice", "trigger", 0)
   params:set_action("rand_splice_param", function() set_random_splice() end)
-
-  params:add_separator("splice_audio_params", "audio")
-
-  params:add_file("append_file", "> select file...", "")
-  params:set_action("append_file", function(path) filename_append = path end)
-
-  params:add_trigger("add_audio", "...and append to reel >>")
-  params:set_action("add_audio", function() load_splice() params:set("append_file", "") end)
-
-  params:add_binary("flip_splice_param", "> reverse active splice", "trigger", 0)
-  params:set_action("flip_splice_param", function() flip_splice() end)
-
-  params:add_trigger("reduce_gain", "> reduce gain [-1bB]")
-  params:set_action("reduce_gain", function() gain_reduction() end)
-
-  params:add_trigger("save_splice", "< save splice")
-  params:set_action("save_splice", function() textentry.enter(save_splice) end)
-
-  params:add_control("reduction_level", "...by", controlspec.new(0, 0.7, "lin", 0, 0.7), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-  params:hide("reduction_level")
 
   params:add_separator("splice_danger_zone", "danger zone")
 
@@ -1403,6 +1504,38 @@ function init()
   params:add_binary("morph_freez", "> freeze values", "toggle", 0)
   params:set_action("morph_freez", function(x) morph_freeze = x == 1 and true or false page_redraw(2) end)
 
+  -- keyboard params
+  params:add_separator("keyboard_params",  "keyboard midi/grid")
+
+  params:add_option("midi_device", "midi device", midi_devices, 1)
+  params:set_action("midi_device", function(val) m = midi.connect(val) set_midi_event_callback() end)
+
+  params:add_number("midi_channel", "midi channel", 1, 16, 1)
+  params:set_action("midi_channel", function(val) midi_channel = val end)
+
+  params:add_number("root_note", "root note", 1, 127, 60, function(param) return mu.note_num_to_name(param:get(), true) end)
+  params:set_action("root_note", function(val) midi_root = val key_root = val - 81 dirtygrid = true end)
+
+  params:add_number("grid_interval", "interval [y]", 2, 6, 4, function(param) return param:get().."st" end)
+  params:set_action("grid_interval", function(val) g_interval = val dirtygrid = true end)
+
+  params:add_option("adsr_active", "envelope", {"off", "on"}, 1)
+  params:set_action("adsr_active", function() init_envelope() end)
+
+  params:add_group("env_settings", "envelope settings", 4)
+
+  params:add_control("adsr_attack", "attack", controlspec.new(0, 10, 'lin', 0.1, 0.2, "s"))
+  params:set_action("adsr_attack", function(val) env.attack = val * 10 end)
+
+  params:add_control("adsr_decay", "decay", controlspec.new(0, 10, 'lin', 0.1, 0.5, "s"))
+  params:set_action("adsr_decay", function(val) env.decay = val * 10 end)
+
+  params:add_control("adsr_sustain", "sustain", controlspec.new(0, 1, 'lin', 0, 1, ""), function(param) return (round_form(param:get() * 100, 1, "%")) end)
+  params:set_action("adsr_sustain", function(val) env.sustain = val end)
+
+  params:add_control("adsr_release", "release", controlspec.new(0, 10, 'lin', 0.1, 1, "s"))
+  params:set_action("adsr_release", function(val) env.release = val * 10 end)   
+
   --[[
  -- lfo params
  params:add_separator("modulation", "modulation")
@@ -1447,9 +1580,7 @@ function init()
  local morph_lfo = _lfos:add{min = 0, max = 1}
  morph_lfo:add_params("morph_lfo", "morph", "morph lfo")
  morph_lfo:set("action", function(scaled, raw) params:set("morph", scaled) end)
-  ]]
- 
-
+ ]]
  
   -- init softcut settings
   for i = 1, GENE_NUM do -- genes 1 - 4
@@ -1525,7 +1656,7 @@ function init()
   params.action_write = function(filename, name, number)
     -- make directories
     os.execute("mkdir -p "..norns.state.data.."pset_data/"..number.."/")
-    os.execute("mkdir -p ".._path.audio.."concrete/")
+    os.execute("mkdir -p ".._path.audio.."concrete/reels")
     -- store data in one big table
     local reel_data = {}
     reel_data.active = active_splice
@@ -1533,8 +1664,10 @@ function init()
     reel_data.voice = {table.unpack(voice)}
     if save_buffer then
       local length = splice[#splice].e - 1
-      softcut.buffer_write_mono(_path.audio.."concrete/"..name..".wav", 1, length, 1)
-      reel_data.path = _path.audio.."concrete/"..name..".wav"
+      softcut.buffer_write_mono(_path.audio.."concrete/reels/"..name..".wav", 1, length, 1)
+      reel_data.path = _path.audio.."concrete/reels/"..name..".wav"
+    else
+      reel_data.path = filename_reel
     end
     -- and save the chunk
     tab.save(reel_data, norns.state.data.."pset_data/"..number.."/"..name.."_reel.data")
@@ -1549,29 +1682,27 @@ function init()
       io.close(loaded_file)
        -- load sesh data
       local reel_data = tab.load(norns.state.data.."pset_data/"..number.."/"..pset_id.."_reel.data")
-      if save_buffer then
-        params:set("load_reel", reel_data.path)
-      end
+      softcut.buffer_clear()
+      softcut.buffer_read_mono(reel_data.path, 0, 1, -1, 1, 1, 0, 1)
+      active_splice = reel_data.active
+      splice = {table.unpack(reel_data.splice)}
+      voice = {table.unpack(reel_data.voice)}
+      set_loops()
+      set_start_pos()
+      reel_has_audio = true
+      init_recording = false
+      waveviz_reel = true
+      softcut.render_buffer(1, 1, splice[#splice].e - 1, 128)
       clock.run(
         function()
-          clock.sleep(0.4)
-          active_splice = reel_data.active
-          splice = {table.unpack(reel_data.splice)}
-          voice = {table.unpack(reel_data.voice)}
-          set_loops()
-          set_start_pos()
-          waveviz_reel = true
-          softcut.render_buffer(1, 1, splice[#splice].e - 1, 128)
-          clock.run(
-            function()
-              clock.sleep(0.1)
-              waveviz_splice = true
-              softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
-            end
-          )
-          print("finished reading pset:'"..pset_id.."'")
+          clock.sleep(0.1)
+          waveviz_splice = true
+          softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
         end
       )
+      params:set("adsr_active", 1)
+      dirtygrid = true
+      print("finished reading pset:'"..pset_id.."'")
     end
   end
 
@@ -1585,8 +1716,9 @@ function init()
   arc.remove = drawarc_disconnect
   midi.add = midi_connect
   midi.remove = midi_disconnect
-  norns.crow.add = crow_connect
-  norns.crow.remove = crow_disconnect
+  midi.event = 
+  --norns.crow.add = crow_connect
+  --norns.crow.remove = crow_disconnect
 
   softcut.event_render(wave_render)
   softcut.event_phase(poll_positions)
@@ -1609,9 +1741,8 @@ function init()
   screenredrawtimer:start()
 
   hardwareredrawtimer = metro.init(function() hardware_redraw() end, 1/30, -1)
-  if arc_is then
-    hardwareredrawtimer:start()
-  end
+  hardwareredrawtimer:start()
+  dirtygrid = true
 
   warbletimer = metro.init(function() make_warble() end, 1/10, -1)
   warbletimer:start()
@@ -1620,6 +1751,7 @@ function init()
   geneclock = clock.run(step_genes)
   morphclock = clock.run(morph_values)
   ghostclock = clock.run(ghost_activity)
+  envcounter = clock.run(env_run)
 
   -- bang params
   if pset_load then
@@ -1753,6 +1885,10 @@ function key(n, z)
     elseif n == 3 and z == 1 then
       param_page3 = (param_page3 + 1) % 4
     end
+  elseif pageNum == 4 then
+    if n == 2 and z == 1 then
+      focus_page4 = 1 - focus_page4
+    end
   end
   dirtyscreen = true
 end
@@ -1824,8 +1960,8 @@ function enc(n, d)
           end
           -- set rate
           rate_idx = util.clamp(rate_idx + inc, 1, #scale[idx])
-          voice_rate = scale[idx][rate_idx]
-          params:set("varispeed", voice_rate)
+          local rate = scale[idx][rate_idx]
+          params:set("varispeed", rate)
         else
           params:delta("varispeed", d / 20)
         end
@@ -1836,10 +1972,31 @@ function enc(n, d)
   elseif pageNum == 3 then
     local i = focus_page3 == 0 and 1 or 3
     local parameter = options.params[param_page3 + 1]
+    local glb_param = options.params_gbl[param_page3 + 1]
     if n == 2 then
-      params:delta(parameter..i, d)
+      if shift then
+        params:delta(glb_param, d)
+      else
+        params:delta(parameter..i, d)
+      end
     elseif n == 3 then
-      params:delta(parameter..i + 1, d)
+      if not shift then
+        params:delta(parameter..i + 1, d)
+      end
+    end
+  elseif pageNum == 4 then
+    if focus_page4 == 0 then
+      if n == 2 then
+        params:delta("adsr_attack", d)
+      elseif n == 3 then
+        params:delta("adsr_decay", d)
+      end
+    else
+      if n == 2 then
+        params:delta("adsr_sustain", d)
+      elseif n == 3 then
+        params:delta("adsr_release", d)
+      end
     end
   end
   dirtyscreen = true
@@ -1982,9 +2139,19 @@ function redraw()
     screen.level(focus_page1 == 1 and 15 or 4)
     if rec then screen.level(0) end
     screen.move(10, 38)
-    screen.text("R")
+    if g_rec_speed then
+      if params:get("rec_rate") == 1 then
+        screen.text("F")
+      elseif params:get("rec_rate") == 2 then
+        screen.text("C")
+      else
+        screen.text("H")
+      end
+    else
+      screen.text("R")
+    end
 
-    if shift and focus_page1 == 1 then
+    if (shift or g_rec_dest) and focus_page1 == 1 then
       if params:get("rec_dest") == 1 then
         screen.move(10, 40)
         screen.text("_")
@@ -2224,6 +2391,31 @@ function redraw()
         screen.fill()
       end
     end
+  elseif pageNum == 4 then
+    -- a/d
+    screen.level(focus_page4 == 0 and 15 or 4)
+    screen.font_size(16)
+    screen.move(25, 30)
+    screen.text_center("A")
+    screen.move(50, 30)
+    screen.text_center("D")
+    screen.font_size(8)
+    screen.move(25, 46)
+    screen.text_center(params:string("adsr_attack"))
+    screen.move(50, 46)
+    screen.text_center(params:string("adsr_decay"))
+    -- s/r
+    screen.level(focus_page4 == 1 and 15 or 4)
+    screen.font_size(16)
+    screen.move(75, 30)
+    screen.text_center("S")
+    screen.move(100, 30)
+    screen.text_center("R")
+    screen.font_size(8)
+    screen.move(75, 46)
+    screen.text_center(params:string("adsr_sustain"))
+    screen.move(100, 46)
+    screen.text_center(params:string("adsr_release"))
   end
   screen.update()
 end
@@ -2249,8 +2441,8 @@ function a.delta(n, d)
           end
           -- set rate      
           rate_idx = util.clamp(rate_idx + inc, 1, #scale[idx])
-          voice_rate = scale[idx][rate_idx]
-          params:set("varispeed", voice_rate)
+          local rate = scale[idx][rate_idx]
+          params:set("varispeed", rate)
         end
       else
         params:delta("varispeed", d / arc_vs_sens)
@@ -2274,9 +2466,25 @@ function a.delta(n, d)
     elseif n == 4 then
       params:delta("morph", d / 20)
     end
-  else
-    local parameter = options.params[param_page3 + 1]
-    params:delta(parameter..n, d / 20)
+  elseif pageNum == 3 then
+    if shift then
+      local glb_param = options.params_gbl[param_page3 + 1]
+      params:delta(glb_param, d / 20)
+    else
+      local parameter = options.params[param_page3 + 1]
+      params:delta(parameter..n, d / 20)
+    end
+  elseif pageNum == 4 then
+    if n == 1 then
+      params:delta("adsr_attack", d / 20)
+    elseif n == 2 then
+      params:delta("adsr_decay", d / 20)
+    elseif n == 3 then
+      params:delta("adsr_sustain", d / 20)
+    elseif n == 4 then
+      params:delta("adsr_release", d / 20)
+    end
+    page_redraw(4)
   end
 end
 
@@ -2306,7 +2514,6 @@ function arcredraw()
     end
     a:led(1, 22 - arc_off, 6)
     a:led(1, -20 - arc_off, 6)
-    
     -- draw slide
     local gene_4_pos = math.floor(voice[4].pos_rel * 58 + 1) - 29
     a:led(2, gene_4_pos - arc_off, 2)
@@ -2320,7 +2527,6 @@ function arcredraw()
     a:led(2, 30 - arc_off, 6)
     local slideview = math.floor(params:get("slide") * 58 + 1) - 29
     a:led(2, slideview - arc_off, 15)
-    
     -- gene size
     local startpoint = math.floor(params:get("gene_size") * -28)
     local endpoint = math.ceil(params:get("gene_size") * 28)
@@ -2329,7 +2535,6 @@ function arcredraw()
     end
     a:led(3, -28 - arc_off, 6)
     a:led(3, 30 - arc_off, 6)
-    
     -- morph
     local m_view_raw = math.ceil(params:get("morph") * 58 + 1)
     local m_view = util.clamp(m_view_raw, 1, 45) - 29
@@ -2351,7 +2556,7 @@ function arcredraw()
     a:led(4, -28 - arc_off, 6)
     a:led(4, 30 - arc_off, 6)
     a:led(4, m_view - arc_off, 15)
-  else
+  elseif pageNum == 3 then
     local parameter = options.params[param_page3 + 1]
     for i = 1, 4 do
       if parameter == "level" then
@@ -2401,14 +2606,274 @@ function arcredraw()
         a:led(i, arc_q - arc_off, 15)        
       end
     end
+  elseif pageNum == 4 then
+      -- draw adsr attack
+    local attack = math.floor(util.linlin(0.1, 10, 0, 1, params:get("adsr_attack")) * 48) + 41
+    a:led (1, 25 - arc_off, 5)
+    a:led (1, -23 - arc_off, 5)
+    for i = -22, 24 do
+      if i < attack - 64 then
+        a:led(1, i - arc_off, 3)
+      end
+    end
+    a:led(1, attack - arc_off, 15)
+    -- draw adsr decay
+    local decay = math.floor(util.linlin(0.1, 10, 0, 1, params:get("adsr_decay")) * 48) + 41
+    a:led (2, 25 - arc_off, 5)
+    a:led (2, -23 - arc_off, 5)
+    for i = -22, 24 do
+      if i < decay - 64 then
+        a:led(2, i - arc_off, 3)
+      end
+    end
+    a:led(2, decay - arc_off, 15)
+    -- draw adsr sustain
+    local sustain = math.floor(params:get("adsr_sustain") * 48) + 41
+    a:led (3, 25 - arc_off, 5)
+    a:led (3, -23 - arc_off, 5)
+    for i = -22, 24 do
+      if i < sustain - 64 then
+        a:led(3, i - arc_off, 3)
+      end
+    end
+    a:led(3, sustain - arc_off, 15)
+    -- draw adsr release
+    local release = math.floor(util.linlin(0.1, 10, 0, 1, params:get("adsr_release")) * 48) + 41
+    a:led (4, 25 - arc_off, 5)
+    a:led (4, -23 - arc_off, 5)
+    for i = -22, 24 do
+      if i < release - 64 then
+        a:led(4, i - arc_off, 3)
+      end
+    end
+    a:led(4, release - arc_off, 15)
   end
   a:refresh()
+end
+
+
+-------- grid UI --------
+local held_key = 0
+
+function g.key(x, y, z)
+  if y == 8 then
+    if x == 3 then
+      --g_pos_reset = z == 1 and true or false
+    elseif x == 4 then
+      g_rec_dest = z == 1 and true or false
+      dirtyscreen = true
+    elseif x == 5 then
+      g_rec_speed = z == 1 and true or false
+      dirtyscreen = true
+    elseif x == 6 and not (g_rec_speed or g_rec_dest) then
+      g_rec_mode = z == 1 and true or false
+    end
+  end
+  -- left quardrant
+  if x < 9 then
+    if z == 1 then
+      if y < 5 then
+        local i = x + (y - 1) * 8
+        if i <= #splice then
+          local inc = i - active_splice
+          set_active_splice(inc)
+        else
+          if play then add_splice() end
+        end
+        dirtyscreen = true
+      elseif y == 5 then
+        if x == 2 then
+          params:set("varispeed", 0)
+        elseif x > 2 and x < 8 then
+          local rate = scale[1][x + 3]
+          params:set("varispeed", rate)
+        end
+      elseif y == 6 then
+        if x == 7 then
+          params:set("varispeed", 0)
+        elseif x > 1 and x < 7 then
+          local rate = scale[1][x - 1]
+          params:set("varispeed", rate)
+        end
+      elseif y == 7 then
+        -- rec params
+      elseif y == 8 then
+        if x < 3 then
+          set_play()
+        elseif x == 3 then
+          set_start_pos()
+        elseif x == 6 and not g_rec_mode then
+          if g_rec_dest then
+            params:set("rec_dest", 1)
+          elseif g_rec_speed then
+            params:set("rec_rate", 1)
+          end
+        elseif x == 7 then
+          if g_rec_dest then
+            params:set("rec_dest", 2)
+          elseif g_rec_mode then
+            params:set("rec_mode", 1)
+          elseif g_rec_speed then
+            params:set("rec_rate", 2)
+          else
+            if rec_at_threshold then
+              amp_in[1]:stop()
+              amp_in[2]:stop()
+              rec_at_threshold = false
+            else
+              amp_in[1]:start()
+              amp_in[2]:start()
+              rec_at_threshold = true
+            end
+          end
+        elseif x == 8 then
+          if g_rec_dest then
+            params:set("rec_dest", 3)
+          elseif g_rec_mode then
+            params:set("rec_mode", 2)
+          elseif g_rec_speed then
+            params:set("rec_rate", 3)
+          else
+            toggle_recording()
+          end
+        end
+        dirtyscreen = true
+      end
+    elseif z == 0 then
+      if y == 8 then
+        if x == 2 then
+          set_play()
+        end
+      end
+    end
+  -- right quadrant
+  else
+    if y < 7 then
+      local note = (key_root + x) + g_interval * (6 - y)
+      held_key = held_key + (z * 2 - 1)
+      --local v = util.wrap(held_key, 1, 4)
+      if z == 1 then
+        local semitone = math.pow(2, note / 12)
+        for i = 1, 4 do
+          voice[i].trsp_value = semitone
+          if params:get("adsr_active") == 2 then
+            env_gate_on(i)
+          end
+        end
+        set_rate()
+        --print("note on "..note)
+      else
+        if held_key < 1 then
+          for i = 1, 4 do
+            if params:get("adsr_active") == 2 then
+              env_gate_off(i)
+            end
+            --voice[i].trsp_value = voice[1].trsp_value
+          end
+        end
+        --print("note off "..note)
+      end
+    elseif y == 8 then
+      if x == 11 and z == 1 then
+        pageNum = 1
+        dirtyscreen = true
+      elseif x == 12 and z == 1 then
+        pageNum = 2
+        dirtyscreen = true
+      elseif x == 13 and z == 1 then
+        pageNum = 3
+        dirtyscreen = true
+      elseif x == 14 and z == 1 then
+        pageNum = 4
+        dirtyscreen = true
+      elseif x == 16 and z == 1 then
+        params:set("adsr_active", params:get("adsr_active") == 1 and 2 or 1)
+      end
+    end
+  end
+  dirtygrid = true
+end
+
+function gridredraw()
+  g:all(0)
+  -- splices
+  for i = 1, 8 do
+    for j = 1, 4 do
+      g:led(i, j, 1)
+    end
+  end
+  for i = 1, #splice do
+    if i < 9 then
+      g:led(i, 1, i == active_splice and 12 or 6)
+    elseif i < 17 then
+      g:led(i - 8, 2, i == active_splice and 12 or 5)
+    elseif i < 25 then
+      g:led(i - 16, 3, i == active_splice and 12 or 4)
+    elseif i < 33 then
+      g:led(i - 24, 4, i == active_splice and 12 or 3)
+    end
+  end
+  -- speed
+  for i = 1, 6 do
+    g:led(i + 1, 5, i * 2)
+    g:led(i + 1, 6, 14 - i * 2)
+  end
+  -- playback & recording
+  g:led(1, 8, play and 12 or 6)
+  g:led(2, 8, play and 8 or 4)
+  g:led(3, 8, g_pos_reset and 15 or 2)
+  g:led(4, 8 , g_rec_dest and 10 or 0)
+  g:led(5, 8 , g_rec_speed and 10 or 0)
+  g:led(6, 8 , g_rec_mode and 10 or 0)
+  if g_rec_dest then
+    for i = 1, 3 do
+      g:led(i + 5, 8, params:get("rec_dest") == i and 8 or 4)
+    end
+  elseif g_rec_speed then
+    for i = 1, 3 do
+      g:led(i + 5, 8, params:get("rec_rate") == i and 8 or 4)
+    end
+  elseif g_rec_mode then
+    for i = 1, 2 do
+      g:led(i + 6, 8, params:get("rec_mode") == i and 8 or 4)
+    end
+  else
+    g:led(7, 8 , rec_at_threshold and 8 or 4)
+    g:led(8, 8 , recording and 15 or 6)
+  end
+  -- left quadrant
+  for x = 9, 16 do
+    for y = 1, 6 do
+      local note = (-21 + x) + g_interval * (6 - y)
+      local hs = note % 12
+      if hs == 0 then
+        g:led(x, y, 12)
+      elseif hs == 4 then
+        g:led(x, y, 5)
+      elseif hs == 5 then
+        g:led(x, y, 8)
+      elseif hs == 2 or hs == 7 or hs == 9 or hs == 11 then
+        g:led(x, y, 4)
+      else
+        g:led(x, y, 2)  
+      end
+    end
+  end
+  for i = 1, 4 do
+    g:led(10 + i, 8, pageNum == i and 12 or 4)
+  end
+  g:led(16, 8, params:get("adsr_active") == 2 and 12 or 6)
+  g:refresh()
 end
 
 
 -------- utilities --------
 function hardware_redraw()
   if arc_is then arcredraw() end
+  if dirtygrid then
+    gridredraw()
+    dirtygrid = false
+  end
 end
 
 function screen_redraw()
@@ -2441,9 +2906,9 @@ function build_menu()
     params:hide("arc_params")
   end
   if crow_is then
-    params:show("crow_params")
+    --params:show("crow_params")
   else
-    params:hide("crow_params")
+    --params:hide("crow_params")
   end
   _menu.rebuild_params()
   dirtyscreen = true
