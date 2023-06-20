@@ -137,7 +137,7 @@ options.crow_input = {"none", "play [trig]", "play [gate]", "restart [trig]", "r
 options.crow_output = {"none", "gene ramp [cv]", "loop reset [trig]"}
 options.clock_tempo = {"2", "1", "1/2", "1/4", "3/16", "1/6", "1/8", "3/32", "1/12", "1/16","1/32"}
 options.clock_value = {2, 1, 1/2, 1/4, 3/16, 1/6, 1/8, 3/32, 1/12, 1/16, 1/32}
-options.params_gbl = {"global_level", "global_pan", "global_cutoff", "global_filter_q"}
+options.params_gbl = {"global_level", "global_pan", "global_cutoff_rel", "global_filter_q_rel"}
 options.params = {"level", "pan", "cutoff", "filter_q"}
 options.params_view = {"level", "pan", "cutoff", "filter q"}
 options.rate_slew = {0, 0.05, 0.1, 0.2, 0.5}
@@ -621,11 +621,11 @@ function set_cutoff(d)
   for i = 1, GENE_NUM do
     if d < 0 and params:get("cutoff"..i) > 20 then
       params:delta("cutoff"..i, d)
-      params:set("global_cutoff", 0)
+      params:set("global_cutoff_rel", 0)
       delta_viz_fc = "<<"
     elseif d > 0 and params:get("cutoff"..i) < 18000 then
       params:delta("cutoff"..i, d)
-      params:set("global_cutoff", 0)
+      params:set("global_cutoff_rel", 0)
       delta_viz_fc = ">>"
     end
   end
@@ -643,11 +643,11 @@ function set_filter_q(d)
   for i = 1, GENE_NUM do
     if d < 0 and params:get("filter_q"..i) > 0.1 then
       params:delta("filter_q"..i, d)
-      params:set("global_filter_q", 0)
+      params:set("global_filter_q_rel", 0)
       delta_viz_fq = "<<"
     elseif d > 0 and params:get("filter_q"..i) < 4 then
       params:delta("filter_q"..i, d)
-      params:set("global_filter_q", 0)
+      params:set("global_filter_q_rel", 0)
       delta_viz_fq = ">>"
     end
   end
@@ -1389,7 +1389,7 @@ function init()
   -- voice params
   params:add_separator("voices", "voix")
   
-  params:add_group("global_voice_params", "all", 5)
+  params:add_group("global_voice_params", "all", 7)
 
   params:add_control("global_level", "level", controlspec.new(0, 1, "lin", 0, 1), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:set_action("global_level", function(x) glb_level = x set_levels() page_redraw(3) end)
@@ -1397,11 +1397,19 @@ function init()
   params:add_control("global_pan", "pan", controlspec.new(-1, 1, "lin", 0, 1, ""), function(param) return (round_form(util.linlin(-1, 1, -100, 100, param:get()), 1, "%")) end)
   params:set_action("global_pan", function(x) glb_pan = x set_panning() page_redraw(3) end)
 
-  params:add_number("global_cutoff", "cutoff", -1, 1, 0, function() return delta_viz_fc end)
-  params:set_action("global_cutoff", function(d) if d ~= 0 then set_cutoff(d) end page_redraw(3) end)
+  params:add_control("global_cutoff_abs", "cutoff", controlspec.new(20, 18000, 'exp', 1, 18000, "Hz"))
+  params:set_action("global_cutoff_abs", function(x) for i = 1, GENE_NUM do params:set("cutoff"..i, x) end page_redraw(3) end)
 
-  params:add_number("global_filter_q", "filter q", -1, 1, 0, function() return delta_viz_fq end)
-  params:set_action("global_filter_q", function(d) if d ~= 0 then set_filter_q(d) end page_redraw(3) end)
+  params:add_control("global_filter_q_abs", "filter q", controlspec.new(0.1, 4.0, 'exp', 0.01, 2.0, ""))
+  params:set_action("global_filter_q_abs", function(x) for i = 1, GENE_NUM do params:set("filter_q"..i, x) end page_redraw(3) end)
+
+  params:add_number("global_cutoff_rel", "cutoff", -1, 1, 0, function() return delta_viz_fc end)
+  params:set_action("global_cutoff_rel", function(d) if d ~= 0 then set_cutoff(d) end page_redraw(3) end)
+  params:hide("global_cutoff_rel")
+
+  params:add_number("global_filter_q_rel", "filter q", -1, 1, 0, function() return delta_viz_fq end)
+  params:set_action("global_filter_q_rel", function(d) if d ~= 0 then set_filter_q(d) end page_redraw(3) end)
+  params:hide("global_filter_q_rel")
 
   params:add_option("global_filter_type", "filter type", {"low pass", "high pass", "band pass", "band reject", "off"}, 1)
   params:set_action("global_filter_type", function(x) for i = 1, GENE_NUM do params:set("filter_type"..i, x) end end)
