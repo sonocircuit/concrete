@@ -1,10 +1,10 @@
--- concre'te v0.1.4 @sonocircuit
+-- concrete v0.1.7 @sonocircuit
 -- llllllll.co/t/concrete
 --
--- virtual tape
--- explorations
---
---
+--    virtual tape exploration
+--    ---- | --- --- -- ---- -- 
+--      --- -- ------ | --- -
+--     ---- -- | ------ --- | -
 --
 -- for docs go to:
 -- >> github.com
@@ -13,17 +13,11 @@
 -- or smb into:
 -- >> code/concrete/docs
 --
---
---
---       -- ----- -- -
---          -- ----- -- -
---             -- ----- -- -
---
---
+
 
 -----------------------------------------------------------------------------------------------------------------------------
--- TODO 1: revisit LFOs --> matrix mod? adapt lfo lib?
--- TODO 2: fix crow implementation and reactivate
+-- TODO 1: add crow in
+-- TODO 2: revisit LFOs --> adapt lfo lib? avoid params:set --> params:delta instead
 -----------------------------------------------------------------------------------------------------------------------------
 
 local a = arc.connect()
@@ -36,8 +30,8 @@ local mu = require 'musicutil'
 --local _lfos = include 'lib/concrete_lfo'
 
 -------- variables --------
-local pset_load = false
-local default_pset = 1
+local pset_load = true
+local default_pset = 3
 
 local shift = false
 local pageNum = 1
@@ -46,6 +40,7 @@ local focus_page2 = 0
 local focus_page3 = 0
 local param_page3 = 0
 local focus_page4 = 0
+
 local active_splice = 1
 local prev_splice = 1
 local play = false
@@ -54,11 +49,30 @@ local is_recording = false
 local ext_signal = 1 
 local sos_signal = 0
 local armed = false
+
+local save_buffer = false
+local filename_reel = ""
+local reel_path = _path.audio .. "concrete/reels/"
+local splice_path = _path.audio .. "concrete/splices/"
+
+local MAX_REEL = 320
+local GENE_NUM = 4
+local ghost_voice = 5
+local rec_voice = 6
+local rec_at_threshold = false
+
+local reel_has_audio = false
+local reel_is_full = false
+local init_recording = true
+local waveviz_reel = false
+local waveviz_splice = false
+
 local glb_level = 1
 local glb_pan = 1
 local glb_cutoff = 1
 local glb_filter_q = 1
 local gbl_rate_slew = 0
+
 local voice_rate = 1
 local prev_morph_val = 0
 local pos_counter = 0
@@ -67,23 +81,16 @@ local morph_freeze = false
 local morph_clocked = false
 local mclk_div = 1
 local gclk_div = 1
-local reel_has_audio = false
-local reel_is_full = false
-local init_recording = true
-local waveviz_reel = false
-local waveviz_splice = false
-local save_buffer = false
-local filename_reel = ""
-local MAX_REEL = 320
-local GENE_NUM = 4
-local ghost_voice = 5
-local rec_voice = 6
-local rec_at_threshold = false
+local rate_rst = false
+local pan_rst = false
+
 local midi_channel = 1
 local midi_root = 60
 local key_root = -21
 local crow_is = false
-local dirtygrid = false
+
+local voicetab = {0, 0, 0, 0}
+local voicenum = 0
 
 -- variables for arc
 local arc_is = false
@@ -97,6 +104,9 @@ local g_rec_mode = false
 local g_rec_dest = false
 local g_rec_speed = false
 local g_interval = 4
+local g_voice = 0
+local g_set_env = false
+local dirtygrid = false
 
 -- variables for warble
 local tau = math.pi * 2
@@ -129,6 +139,7 @@ local M3_1 = math.pow(2, 16/12)
 local p4_1 = math.pow(2, 17/12)
 local p5_1 = math.pow(2, 19/12)
 local oct2 = math.pow(2, 24/12) -- speed == 4
+
 
 -------- tables --------
 local options = {}
@@ -169,6 +180,16 @@ for i = 1, 6 do
   voice[i].trsp_value = 1
   voice[i].pos_abs = 1
   voice[i].pos_rel = 0
+end
+
+local g_key = {}
+for x = 9, 16 do
+  g_key[x] = {}
+  for y = 1, 6 do
+    g_key[x][y] = {}
+    g_key[x][y].state = false
+    g_key[x][y].voice = 1
+  end
 end
 
 -------- reels --------
@@ -215,7 +236,7 @@ function save_splice(txt)
   if txt then
     local start = splice[active_splice].s
     local length = splice[active_splice].e - splice[active_splice].s
-    util.make_dir(_path.audio .. "concrete/splices")
+    --util.make_dir(_path.audio .. "concrete/splices")
     softcut.buffer_write_mono(_path.audio.."concrete/splices/"..txt..".wav", start, length, 1)
     print("splice saved: " .._path.audio .. "concrete/splices/" .. txt .. ".wav")
   else
@@ -226,7 +247,7 @@ end
 function save_reel(txt)
   if txt then
     local length = splice[#splice].e - 1
-    util.make_dir(_path.audio .. "concrete/reels")
+    --util.make_dir(_path.audio .. "concrete/reels")
     softcut.buffer_write_mono(_path.audio.."concrete/reels/"..txt..".wav", 1, length, 1)
     print("reel saved: " .._path.audio .. "concrete/reels/" .. txt .. ".wav")
   else
@@ -542,6 +563,7 @@ function set_levels()
   -- voice levels
   for i = 1, GENE_NUM do
     local level = voice[i].level * glb_level
+    -- if poly_mode then set all gene voices to level regardless of their active state.
     if play and voice[i].active then
       softcut.level(i, level)
     else
@@ -612,7 +634,6 @@ function set_panning()
     softcut.pan(i, pan)
   end
 end
-
 
 local delta_viz_fc = "<  >"
 function set_cutoff(d)
@@ -688,8 +709,6 @@ function set_rate_slew(mode)
   end
 end
 
-local rate_rst = false
-local pan_rst = false
 function reset_morph_params()
   if not morph_freeze then
     local morph = params:get("morph") * 100
@@ -809,7 +828,7 @@ function set_loops()
       voice[4].s = voice[4].s - splice[active_splice].l
     end
     voice[4].active = true
-  elseif mval > 90 then -- if > 90 then max rand and changing start pos will not change the start pos of the other genes.
+  elseif mval > 95 then -- if > 95 then max rand and changing start pos will not change the start pos of the other genes.
     -- keep things how they are
   end
 end
@@ -895,6 +914,7 @@ function step_genes()
     end
   end
 end
+
 
 -------- ghost voice --------
 function ghost_activity()
@@ -996,7 +1016,6 @@ function wave_render(ch, start, i, s)
     waveform_splice_samples = s
     waveviz_splice = false
     wave_splice_gain = table_getmax(waveform_splice_samples) / 0.8
-    --reel_has_audio = wave_reel_gain > 0 and true or false
   end
   dirtyscreen = true
 end
@@ -1065,7 +1084,7 @@ local env = {}
 env.attack = 0
 env.decay = 0
 env.sustain = 1
-env.release = 0
+env.release = 1
 for i = 1, 4 do
   env[i] = {}
   env[i].gate = false
@@ -1078,7 +1097,6 @@ for i = 1, 4 do
   env[i].prev_value = 0
   env[i].count = 0
   env[i].direction = 0
-  env[i].id = "env "..i
 end
 
 function env_gate_on(i)
@@ -1087,7 +1105,6 @@ function env_gate_on(i)
   env[i].a_is_running = true
   env[i].count = 0
   env[i].direction = 1
-  --print("gate on")
 end
 
 function env_gate_off(i)
@@ -1098,12 +1115,10 @@ function env_gate_off(i)
   env[i].r_is_running = true
   env[i].count = 0
   env[i].direction = 1
-  --print("gate off")
 end
 
 function env_increment(i, d)
   params:delta("level"..i, d * 100)
-  --if view == vENV then dirtygrid = true end
 end
 
 function env_set_value(i, val)
@@ -1115,7 +1130,7 @@ function env_get_value(i)
 end
 
 function env_stop(i)
-
+ --print("env "..i.." off")
 end
 
 --- make envelope
@@ -1170,7 +1185,7 @@ function env_run()
             env[i].count = 0
             env[i].r_is_running = false
             env_set_value(i, env[i].init_value)
-            env_stop(i)
+            --env_stop(i)
           else
             local d = -(env[i].prev_value - env[i].init_value) / env.release
             env_increment(i, d)
@@ -1180,7 +1195,7 @@ function env_run()
               env[i].r_is_running = false
               env[i].trig = false
               env_set_value(i, env[i].init_value)
-              env_stop(i)
+              --env_stop(i)
             end
           end
         end
@@ -1208,47 +1223,20 @@ function init_envelope()
   page_redraw(3)
 end
 
-function clamp_env_levels(i)
-  if env[i].init_value >= env[i].max_value then
-    params:set(i.."adsr_init", env[i].max_value)
-  end
-  if env.sustain >= env[i].max_value then
-    params:set(i.."adsr_sustain", env[i].max_value)
-  end
-  if env[i].init_value >= env.sustain then
-    params:set(i.."adsr_sustain", env[i].init_value)
-  end
-end
 
-
---[[
 -------- crow --------
-function crow_in_change_1(v)
-  print("channel 1")
-  print(v)
-end
-
-function crow_in_change_2(v)
-  print("channel 2")
+function crow_in_change(v)
   print(v)
 end
 
 function crow_in_stream(v)
-
+  print(v)
 end
 
 function set_crow_input(ch, mode)
-  if mode == 1 then
-    crow.input[ch].mode("none")
-  elseif mode > 1 and mode < 10 then
-    crow.input[ch].mode("change", 2.0, 0.2, "both")
-    crow.input[ch].change = ch == 1 and crow_in_change_1 or crow_in_change_2
-  elseif mode > 9 then
-    crow.input[ch].stream = crow_in_stream
-    crow.input[ch].mode("stream", 0.01)
-  end
+  print(ch)
+  print(mode)
 end
-]]
 
 -------- helpers --------
 function round_form(param, quant, form)
@@ -1271,20 +1259,25 @@ function init()
 
   build_midi_device_list()
 
-  --[[
-  -- crow params
-  params:add_group("crow_params",  "CROW", 6)
-
-  for i = 1, 2 do
-    params:add_option("crow_in_"..i, "input "..i, options.crow_input, 1)
-    params:set_action("crow_in_"..i, function(mode) set_crow_input(i, mode) end)
+  if util.file_exists(reel_path) == false then
+    util.make_dir(reel_path)
   end
+
+  if util.file_exists(splice_path) == false then
+    util.make_dir(splice_path)
+  end
+
+  -- crow params
+  params:add_group("crow_params",  "CROW", 4)
+
+  --for i = 1, 2 do
+    --params:add_option("crow_in_"..i, "input "..i, options.crow_input, 1)
+    --params:set_action("crow_in_"..i, function(mode) set_crow_input(i, mode) end)
+  --end
 
   for i = 1, 4 do
     params:add_option("crow_out_"..i, "output "..i, options.crow_output, 1)
   end
-  ]]
-
 
   -- arc params
   params:add_group("arc_params", "ARC", 2)
@@ -1499,13 +1492,16 @@ function init()
   params:add_option("morph_clk", "moprh clock", options.clock_tempo, 7)
   params:set_action("morph_clk", function(idx) mclk_div = options.clock_value[idx] * 4 end)
 
-  params:add_group("rand_settings", "randomization settings", 5)
+  params:add_group("rand_settings", "randomization settings", 6)
 
   params:add_number("morph_prob", "probability", 1, 100, 20, function(param) return param:get().."%" end)
 
   params:add_option("randomize_level", "level @morph > 75", {"off", "on"}, 1)
 
   params:add_option("randomize_pan", "pan @morph > 75", {"off", "on"}, 2)
+
+  params:add_option("randomize_direction", "direction @morph > 80", {"off", "on"}, 2)
+  params:hide("randomize_direction")
 
   params:add_option("randomize_rate", "rate @morph > 80", {"off", "on"}, 2)
 
@@ -1526,6 +1522,8 @@ function init()
 
   params:add_number("grid_interval", "interval [y]", 2, 6, 4, function(param) return param:get().."st" end)
   params:set_action("grid_interval", function(val) g_interval = val dirtygrid = true end)
+
+  params:add_option("keys_mode", "mode", {"mono", "poly"}, 1)
 
   params:add_option("adsr_active", "envelope", {"off", "on"}, 1)
   params:set_action("adsr_active", function() init_envelope() end)
@@ -1664,7 +1662,7 @@ function init()
   params.action_write = function(filename, name, number)
     -- make directories
     os.execute("mkdir -p "..norns.state.data.."pset_data/"..number.."/")
-    os.execute("mkdir -p ".._path.audio.."concrete/reels")
+    --os.execute("mkdir -p ".._path.audio.."concrete/reels")
     -- store data in one big table
     local reel_data = {}
     reel_data.active = active_splice
@@ -1724,9 +1722,8 @@ function init()
   arc.remove = drawarc_disconnect
   midi.add = midi_connect
   midi.remove = midi_disconnect
-  midi.event = 
-  --norns.crow.add = crow_connect
-  --norns.crow.remove = crow_disconnect
+  norns.crow.add = crow_connect
+  norns.crow.remove = crow_disconnect
 
   softcut.event_render(wave_render)
   softcut.event_phase(poll_positions)
@@ -1822,7 +1819,7 @@ function poll_positions(i, pos)
       rec = false
       set_rec()
       reel_is_full = true
-      print("no more space left, sorry :(")
+      print("no more space left :(")
     end
   end
 end
@@ -1907,6 +1904,7 @@ function enc(n, d)
       params:delta("global_level", d)
     else
       pageNum = util.clamp(pageNum + d, 1, 3)
+      dirtygrid = true
     end
   end
   if pageNum == 1 then
@@ -2661,8 +2659,6 @@ end
 
 
 -------- grid UI --------
-local held_key = 0
-
 function g.key(x, y, z)
   if y == 8 then
     if x == 3 then
@@ -2758,44 +2754,56 @@ function g.key(x, y, z)
   else
     if y < 7 then
       local note = (key_root + x) + g_interval * (6 - y)
-      held_key = held_key + (z * 2 - 1)
-      --local v = util.wrap(held_key, 1, 4)
+      local semitone = math.pow(2, note / 12)
+      g_key[x][y].state = z == 1 and true or false
       if z == 1 then
-        local semitone = math.pow(2, note / 12)
-        for i = 1, 4 do
-          voice[i].trsp_value = semitone
-          if params:get("adsr_active") == 2 then
-            env_gate_on(i)
+        if params:get("keys_mode") == 1 then
+          for i = 1, GENE_NUM do
+            voice[i].trsp_value = semitone
+            if params:get("adsr_active") == 2 then env_gate_on(i) end
           end
-        end
-        set_rate()
-        --print("note on "..note)
-      else
-        if held_key < 1 then
-          for i = 1, 4 do
-            if params:get("adsr_active") == 2 then
-              env_gate_off(i)
+          set_rate()
+        else
+          for i, v in ipairs(voicetab) do
+            if v == 0 then
+              voicenum = voicenum + 1
+              g_key[x][y].voice = i
+              voicetab[i] = 1
+              if params:get("adsr_active") == 2 then env_gate_on(i) end
+              for i = voicenum, GENE_NUM do
+                voice[i].trsp_value = semitone
+              end
+              set_rate()
+              return
             end
-            --voice[i].trsp_value = voice[1].trsp_value
           end
         end
-        --print("note off "..note)
+      else
+        if params:get("keys_mode") == 1 then
+          for i = 1, GENE_NUM do
+            if params:get("adsr_active") == 2 then env_gate_off(i) end
+          end
+        else
+          voicetab[g_key[x][y].voice] = 0
+          voicenum = util.clamp(voicenum - 1, 0, 4)
+          for i, v in ipairs(voicetab) do
+            if v == 0 then
+              if params:get("adsr_active") == 2 then env_gate_off(i) end
+            end
+          end
+        end
       end
     elseif y == 8 then
-      if x == 11 and z == 1 then
-        pageNum = 1
-        dirtyscreen = true
-      elseif x == 12 and z == 1 then
-        pageNum = 2
-        dirtyscreen = true
-      elseif x == 13 and z == 1 then
-        pageNum = 3
-        dirtyscreen = true
-      elseif x == 14 and z == 1 then
-        pageNum = 4
+      if x == 14 then g_set_env = z == 1 and true or false end
+      if x > 10 and x < 15 and z == 1 then
+        pageNum = x - 10
         dirtyscreen = true
       elseif x == 16 and z == 1 then
-        params:set("adsr_active", params:get("adsr_active") == 1 and 2 or 1)
+        if g_set_env then
+          params:set("adsr_active", params:get("adsr_active") == 1 and 2 or 1)
+        else
+          params:set("keys_mode", params:get("keys_mode") == 1 and 2 or 1)
+        end
       end
     end
   end
@@ -2868,9 +2876,13 @@ function gridredraw()
     end
   end
   for i = 1, 4 do
-    g:led(10 + i, 8, pageNum == i and 12 or 4)
+    g:led(10 + i, 8, pageNum == i and 14 or 6)
   end
-  g:led(16, 8, params:get("adsr_active") == 2 and 12 or 6)
+  if g_set_env then
+    g:led(16, 8, params:get("adsr_active") == 2 and 15 or 8)
+  else
+    g:led(16, 8, params:get("keys_mode") == 2 and 4 or 2)
+  end
   g:refresh()
 end
 
@@ -2914,9 +2926,9 @@ function build_menu()
     params:hide("arc_params")
   end
   if crow_is then
-    --params:show("crow_params")
+    params:show("crow_params")
   else
-    --params:hide("crow_params")
+    params:hide("crow_params")
   end
   _menu.rebuild_params()
   dirtyscreen = true
