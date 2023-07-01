@@ -1,4 +1,4 @@
--- concrete v0.1.7 @sonocircuit
+-- concrete v0.1.8 @sonocircuit
 -- llllllll.co/t/concrete
 --
 --    virtual tape exploration
@@ -30,7 +30,7 @@ local mu = require 'musicutil'
 --local _lfos = include 'lib/concrete_lfo'
 
 -------- variables --------
-local pset_load = true
+local pset_load = false
 local default_pset = 3
 
 local shift = false
@@ -90,7 +90,7 @@ local key_root = -21
 local crow_is = false
 
 local voicetab = {0, 0, 0, 0}
-local voicenum = 0
+local active_notes = {{}, {}, {}, {}}
 
 -- variables for arc
 local arc_is = false
@@ -679,14 +679,29 @@ function set_filter_q(d)
   end
 end
 
-function set_rate()
+function set_rate(warble)
+  local warble = warble or 1
   for i = 1, GENE_NUM do
-    local rate = voice_rate * voice[i].rate_mod * voice[i].trsp_value
+    local rate = voice_rate * voice[i].rate_mod * voice[i].trsp_value * warble
     softcut.rate(i, rate)
+    --print("voice "..i.." "..voice[i].trsp_value)
   end
   if params:get("rec_rate") == 1 then
     local rate = math.abs(voice_rate)
     softcut.rate(rec_voice, rate)
+  end
+end
+
+function get_snap(inc)
+  local idx = params:get("scale")
+  for i = 1, #scale[idx] do
+    if voice_rate > scale[idx][i] - 0.00001 and voice_rate < scale[idx][i] + 0.00001 then
+      local snap = inc > 0 and i + 1 or i - 1
+      return snap
+    elseif voice_rate < scale[idx][i] then
+      local snap = inc > 0 and i or i - 1
+      return snap
+    end
   end
 end
 
@@ -986,14 +1001,12 @@ function make_warble()
   end
   -- make warble
   if warble_active then
-    for i = 1, GENE_NUM do
-      local warble_rate = voice_rate * (1 + warble_slope)
-      softcut.rate(i, warble_rate)
-    end
+    local warble_rate = voice_rate * (1 + warble_slope)
+    set_rate(warble_rate)
   end
   -- stop warble
   if warble_active and warble_slope > -0.001 then
-    set_rate()
+    set_rate(1)
   end
 end
 
@@ -1031,55 +1044,7 @@ function table_getmax(t)
 end
 
 
--------- midi --------
-function build_midi_device_list()
-  midi_devices = {}
-  for i = 1, #midi.vports do
-    local long_name = midi.vports[i].name
-    local short_name = string.len(long_name) > 15 and util.acronym(long_name) or long_name
-    table.insert(midi_devices, i..": "..short_name)
-  end
-end
-
-function midi_connect()
-  build_midi_device_list()
-end
-
-function midi_disconnect()
-  clock.run(
-    function()
-      clock.sleep(0.2)
-      build_midi_device_list()
-    end
-  )
-end
-
-function midi_events(data)
-  local msg = midi.to_msg(data)
-  if msg.type == "note_on" and msg.ch == midi_channel then
-    local semitone = math.pow(2, (msg.note - midi_root) / 12)
-    for i = 1, 4 do
-      voice[i].trsp_value = semitone
-      if params:get("adsr_active") == 2 then
-        env_gate_on(i)
-      end
-    end
-    set_rate()
-  elseif msg.type == "note_off" and msg.ch == midi_channel then
-    if params:get("adsr_active") == 2 then
-      for i = 1, 4 do
-        env_gate_off(i)
-      end
-    end
-  end
-end
-
-function set_midi_event_callback()
-  midi.cleanup()
-  m.event = midi_events
-end
-
--- envelopes
+-------- envelopes --------
 local env = {}
 env.attack = 0
 env.decay = 0
@@ -1221,6 +1186,83 @@ function init_envelope()
     end
   end
   page_redraw(3)
+end
+
+-------- midi --------
+function build_midi_device_list()
+  midi_devices = {}
+  for i = 1, #midi.vports do
+    local long_name = midi.vports[i].name
+    local short_name = string.len(long_name) > 15 and util.acronym(long_name) or long_name
+    table.insert(midi_devices, i..": "..short_name)
+  end
+end
+
+function midi_connect()
+  build_midi_device_list()
+end
+
+function midi_disconnect()
+  clock.run(
+    function()
+      clock.sleep(0.2)
+      build_midi_device_list()
+    end
+  )
+end
+
+function midi_events(data)
+  local msg = midi.to_msg(data)
+  if msg.type == "note_on" and msg.ch == midi_channel then
+    local semitone = math.pow(2, (msg.note - midi_root) / 12)
+    if params:get("keys_mode") == 1 then
+      for i = 1, GENE_NUM do
+        voice[i].trsp_value = semitone
+        if params:get("adsr_active") == 2 then env_gate_on(i) end
+      end
+      set_rate()
+    else
+      -- poly mode
+      for i, v in ipairs(voicetab) do
+        if v == 0 then
+          active_notes[i] = msg.note
+          voicetab[i] = 1
+          voice[i].trsp_value = semitone
+          for vox = 1, GENE_NUM do
+            if voicetab[vox] == 0 then
+              voice[vox].trsp_value = semitone
+            end
+          end
+          set_rate()
+          if params:get("adsr_active") == 2 then env_gate_on(i) end
+          return
+        end
+      end
+    end
+  elseif msg.type == "note_off" and msg.ch == midi_channel then
+    if params:get("keys_mode") == 1 then
+      if params:get("adsr_active") == 2 then
+        for i = 1, GENE_NUM do
+          env_gate_off(i)
+        end
+      end
+    else
+      -- poly mode
+      if tab.contains(active_notes, msg.note) then
+        voicetab[tab.key(active_notes, msg.note)] = 0
+        for i, v in ipairs(voicetab) do
+          if v == 0 then
+            if params:get("adsr_active") == 2 then env_gate_off(i) end
+          end
+        end
+      end
+    end
+  end
+end
+
+function set_midi_event_callback()
+  midi.cleanup()
+  m.event = midi_events
 end
 
 
@@ -1953,20 +1995,8 @@ function enc(n, d)
     else
       if n == 2 then
         if shift then
-          local idx = params:get("scale")
-          local inc = d > 0 and 1 or -1
-          local rate_idx = 1
-          -- snap to closest scale value
-          for i = 1, #scale[idx] do
-            if scale[idx][i] < voice_rate then
-              rate_idx = inc == 1 and i or i + 1
-            elseif scale[idx][i] == voice_rate then
-              rate_idx = i
-            end
-          end
-          -- set rate
-          rate_idx = util.clamp(rate_idx + inc, 1, #scale[idx])
-          local rate = scale[idx][rate_idx]
+          local idx = util.clamp(get_snap(d), 1, #scale[params:get("scale")])
+          local rate = scale[params:get("scale")][idx]
           params:set("varispeed", rate)
         else
           params:delta("varispeed", d / 20)
@@ -2283,7 +2313,7 @@ function redraw()
     screen.stroke()
 
     screen.level(focus_page2 == 1 and 15 or 4)
-    screen.move(util.linlin(-3, 3, 28, 98, voice_rate), 13)
+    screen.move(util.linlin(-4, 4, 28, 98, voice_rate), 13)
     screen.line_rel(0, 10)
     screen.stroke()
 
@@ -2432,22 +2462,10 @@ function a.delta(n, d)
     -- enc 1: varispeed
     if n == 1 then
       if shift then
-        local idx = params:get("scale")
-        local inc = d > 0 and 1 or -1
-        local rate_idx = 1
         arc_enc1_count = (arc_enc1_count + 1) % 25
         if arc_enc1_count == 0 then
-          -- snap to closest scale value
-          for i = 1, #scale[idx] do
-            if scale[idx][i] < voice_rate then
-              rate_idx = inc == 1 and i or i + 1
-            elseif scale[idx][i] == voice_rate then
-              rate_idx = i
-            end
-          end
-          -- set rate      
-          rate_idx = util.clamp(rate_idx + inc, 1, #scale[idx])
-          local rate = scale[idx][rate_idx]
+          local idx = util.clamp(get_snap(d), 1, #scale[params:get("scale")])
+          local rate = scale[params:get("scale")][idx]
           params:set("varispeed", rate)
         end
       else
@@ -2766,14 +2784,16 @@ function g.key(x, y, z)
         else
           for i, v in ipairs(voicetab) do
             if v == 0 then
-              voicenum = voicenum + 1
               g_key[x][y].voice = i
               voicetab[i] = 1
-              if params:get("adsr_active") == 2 then env_gate_on(i) end
-              for i = voicenum, GENE_NUM do
-                voice[i].trsp_value = semitone
+              voice[i].trsp_value = semitone
+              for vox = 1, GENE_NUM do
+                if voicetab[vox] == 0 then
+                  voice[vox].trsp_value = semitone
+                end
               end
               set_rate()
+              if params:get("adsr_active") == 2 then env_gate_on(i) end
               return
             end
           end
@@ -2785,7 +2805,6 @@ function g.key(x, y, z)
           end
         else
           voicetab[g_key[x][y].voice] = 0
-          voicenum = util.clamp(voicenum - 1, 0, 4)
           for i, v in ipairs(voicetab) do
             if v == 0 then
               if params:get("adsr_active") == 2 then env_gate_off(i) end
