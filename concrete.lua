@@ -1,4 +1,4 @@
--- concrete v0.1.8 @sonocircuit
+-- concrete v0.1.9 @sonocircuit
 -- llllllll.co/t/concrete
 --
 --    virtual tape exploration
@@ -103,6 +103,8 @@ local g_pos_reset = false
 local g_rec_mode = false
 local g_rec_dest = false
 local g_rec_speed = false
+local g_slotinit = false
+local g_slotmod = false
 local g_interval = 4
 local g_voice = 0
 local g_set_env = false
@@ -190,6 +192,16 @@ for x = 9, 16 do
     g_key[x][y].state = false
     g_key[x][y].voice = 1
   end
+end
+
+state_slot = {}
+for i = 1, 8 do
+  state_slot[i] = {}
+  state_slot[i].has_data = false
+  state_slot[i].varispeed = {}
+  state_slot[i].slide = {}
+  state_slot[i].morph = {}
+  state_slot[i].size = {}
 end
 
 -------- reels --------
@@ -724,6 +736,37 @@ function set_rate_slew(mode)
   end
 end
 
+function init_param_state()
+  params:set("varispeed", 1)
+  params:set("slide", 0)
+  params:set("morph", 0)
+  params:set("gene_size", 1)
+  set_start_pos()
+end
+
+function save_param_state(i)
+  state_slot[i].has_data = true
+  state_slot[i].varispeed = params:get("varispeed")
+  state_slot[i].slide = params:get("slide")
+  state_slot[i].morph = params:get("morph")
+  state_slot[i].size = params:get("gene_size")
+end
+
+function clear_param_state(i)
+  state_slot[i].has_data = false
+  state_slot[i].varispeed = {}
+  state_slot[i].slide = {}
+  state_slot[i].morph = {}
+  state_slot[i].size = {}
+end
+
+function load_param_state(i)
+  params:set("varispeed", state_slot[i].varispeed)
+  params:set("slide", state_slot[i].slide)
+  params:set("morph", state_slot[i].morph)
+  params:set("gene_size", state_slot[i].size)
+end
+
 function reset_morph_params()
   if not morph_freeze then
     local morph = params:get("morph") * 100
@@ -970,20 +1013,22 @@ function summon_ghost()
     local ghost_level = voice[ghost_voice].level * glb_level
     softcut.level(ghost_voice, ghost_level)
   end
-  -- ghost vanish
+  -- ghost volatility
   if math.random(100) <= params:get("ghost_duration") then
     voice[ghost_voice].active = false
     local ghost_level = 0
     softcut.level(ghost_voice, ghost_level)
   end
   -- set rec levels
-  if rec then
+  if rec and params:get("ghost_rec") == 2 then
     if params:get("rec_mode") == 1 or params:get("ghost_active") == 1 or params:get("ghost_active") == 3 then
       softcut.level_cut_cut(ghost_voice, rec_voice, 0)
     else
       local level = voice[ghost_voice].active and voice[ghost_voice].level * sos_signal or 0
       softcut.level_cut_cut(ghost_voice, rec_voice, level)
     end
+  else
+    softcut.level_cut_cut(ghost_voice, rec_voice, 0)
   end
 end
 
@@ -1347,7 +1392,7 @@ function init()
   params:add_trigger("clear_reel", "!! clear and reset reel !!")
   params:set_action("clear_reel", function() clear_reel() end)
 
-  params:add_group("rec_params", "recording", 9)
+  params:add_group("rec_params", "recording", 10)
 
   params:add_binary("toggle_rec", "> toggle rec", "trigger", 0)
   params:set_action("toggle_rec", function() toggle_recording() end)
@@ -1372,6 +1417,8 @@ function init()
 
   params:add_control("dub_level", "overdub level", controlspec.new(0, 1, "lin", 0, 0.8), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:set_action("dub_level", function() set_rec() page_redraw(1) end)
+
+  params:add_option("ghost_rec", "record ghost", {"no", "yes"}, 2)
 
   params:add_group("splice_params", "splices", 16)
 
@@ -1710,6 +1757,7 @@ function init()
     reel_data.active = active_splice
     reel_data.splice = {table.unpack(splice)}
     reel_data.voice = {table.unpack(voice)}
+    reel_data.state = {table.unpack(state_slot)}
     if save_buffer then
       local length = splice[#splice].e - 1
       softcut.buffer_write_mono(_path.audio.."concrete/reels/"..name..".wav", 1, length, 1)
@@ -1735,6 +1783,7 @@ function init()
       active_splice = reel_data.active
       splice = {table.unpack(reel_data.splice)}
       voice = {table.unpack(reel_data.voice)}
+      state_slot = {table.unpack(reel_data.state)}
       set_loops()
       set_start_pos()
       reel_has_audio = true
@@ -1945,7 +1994,8 @@ function enc(n, d)
     if shift then
       params:delta("global_level", d)
     else
-      pageNum = util.clamp(pageNum + d, 1, 3)
+      local last_page = params:get("adsr_active") == 1 and 3 or 4
+      pageNum = util.clamp(pageNum + d, 1, last_page)
       dirtygrid = true
     end
   end
@@ -2678,9 +2728,16 @@ end
 
 -------- grid UI --------
 function g.key(x, y, z)
+  if y == 7 then
+    if x == 1 then
+      g_slotinit = z == 1 and true or false
+    elseif x == 8 then
+      g_slotmod = z == 1 and true or false
+    end
+  end
   if y == 8 then
     if x == 3 then
-      --g_pos_reset = z == 1 and true or false
+      g_pos_reset = z == 1 and true or false
     elseif x == 4 then
       g_rec_dest = z == 1 and true or false
       dirtyscreen = true
@@ -2694,7 +2751,7 @@ function g.key(x, y, z)
   -- left quardrant
   if x < 9 then
     if z == 1 then
-      if y < 5 then
+      if y < 4 then
         local i = x + (y - 1) * 8
         if i <= #splice then
           local inc = i - active_splice
@@ -2703,22 +2760,35 @@ function g.key(x, y, z)
           if play then add_splice() end
         end
         dirtyscreen = true
-      elseif y == 5 then
+      elseif y == 4 then
         if x == 2 then
           params:set("varispeed", 0)
         elseif x > 2 and x < 8 then
           local rate = scale[1][x + 3]
           params:set("varispeed", rate)
         end
-      elseif y == 6 then
+      elseif y == 5 then
         if x == 7 then
           params:set("varispeed", 0)
         elseif x > 1 and x < 7 then
           local rate = scale[1][x - 1]
           params:set("varispeed", rate)
         end
-      elseif y == 7 then
-        -- rec params
+      elseif (y == 6 or y == 7) then
+        local i = x - 2 + (y - 6) * 4
+        if x == 1 then
+          init_param_state()
+        elseif x > 2 and x < 7 then
+          if g_slotmod then
+            clear_param_state(i)
+          else
+            if state_slot[i].has_data then
+              load_param_state(i)
+            else
+              save_param_state(i)
+            end
+          end
+        end
       elseif y == 8 then
         if x < 3 then
           set_play()
@@ -2844,14 +2914,18 @@ function gridredraw()
       g:led(i - 8, 2, i == active_splice and 12 or 5)
     elseif i < 25 then
       g:led(i - 16, 3, i == active_splice and 12 or 4)
-    elseif i < 33 then
-      g:led(i - 24, 4, i == active_splice and 12 or 3)
     end
   end
   -- speed
   for i = 1, 6 do
-    g:led(i + 1, 5, i * 2)
-    g:led(i + 1, 6, 14 - i * 2)
+    g:led(i + 1, 4, i * 2)
+    g:led(i + 1, 5, 14 - i * 2)
+  end
+  g:led(1, 7, g_slotinit and 15 or 4)
+  g:led(8, 7, g_slotmod and 15 or 4)
+  for i = 1, 4 do
+    g:led(i + 2, 6, state_slot[i].has_data and 4 or 2)
+    g:led(i + 2, 7, state_slot[i + 4].has_data and 4 or 2)
   end
   -- playback & recording
   g:led(1, 8, play and 12 or 6)
