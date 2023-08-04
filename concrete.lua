@@ -1,4 +1,4 @@
--- concrete v0.1.9 @sonocircuit
+-- concrete v1.0.0 @sonocircuit
 -- llllllll.co/t/concrete
 --
 --    virtual tape exploration
@@ -17,7 +17,7 @@
 
 -----------------------------------------------------------------------------------------------------------------------------
 -- TODO 1: add crow in
--- TODO 2: revisit LFOs --> adapt lfo lib? avoid params:set --> params:delta instead
+-- TODO 2: add LFOs
 -----------------------------------------------------------------------------------------------------------------------------
 
 local a = arc.connect()
@@ -194,7 +194,7 @@ for x = 9, 16 do
   end
 end
 
-state_slot = {}
+local state_slot = {}
 for i = 1, 8 do
   state_slot[i] = {}
   state_slot[i].has_data = false
@@ -802,7 +802,6 @@ function set_start_pos()
     softcut.position(rec_voice, voice[1].s)
   end
 
-  --[[
   for i = 1, 4 do
     if params:get("crow_out_"..i) == 2 then
       crow.output[i].action = "{ to(0, 0), to(8, "..gene_length.."), to(0, 0, 'lin') }"
@@ -812,7 +811,6 @@ function set_start_pos()
       crow.output[i]()
     end
   end
-  ]]
 
   set_levels()
   page_redraw(1)
@@ -1526,9 +1524,9 @@ function init()
 
   params:add_number("ghost_prob", "probability", 0, 100, 16, function(param) return round_form(param:get(), 1, "%") end)
 
-  params:add_number("ghost_duration", "votility", 0, 100, 24, function(param) return round_form(param:get(), 1, "%") end)
+  params:add_number("ghost_duration", "volatility", 0, 100, 24, function(param) return round_form(param:get(), 1, "%") end)
 
-  params:add_option("ghost_distribution", "dispersal", {"free", "contained"})
+  params:add_option("ghost_distribution", "dispersal", {"free", "confined"})
 
   params:add_option("ghost_clk", "rate", options.clock_tempo, 9)
   params:set_action("ghost_clk", function(idx) gclk_div = options.clock_value[idx] * 4 end)
@@ -1576,7 +1574,7 @@ function init()
   params:add_control("morph", "morph", controlspec.new(0, 1, "lin", 0, 0), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:set_action("morph", function() set_loops() reset_morph_params() page_redraw(2) end)
 
-  params:add_option("morph_mode", "morph mode", {"free", "clocked"}, 1)
+  params:add_option("morph_mode", "morph mode", {"normal", "clocked"}, 1)
 
   params:add_option("morph_clk", "moprh clock", options.clock_tempo, 7)
   params:set_action("morph_clk", function(idx) mclk_div = options.clock_value[idx] * 4 end)
@@ -2237,7 +2235,7 @@ function redraw()
       screen.text("R")
     end
 
-    if (shift or g_rec_dest) and focus_page1 == 1 then
+    if (shift and focus_page1 == 1) or g_rec_dest then
       if params:get("rec_dest") == 1 then
         screen.move(10, 40)
         screen.text("_")
@@ -2950,21 +2948,17 @@ function gridredraw()
     g:led(7, 8 , rec_at_threshold and 8 or 4)
     g:led(8, 8 , recording and 15 or 6)
   end
-  -- left quadrant
+  -- right quadrant
   for x = 9, 16 do
     for y = 1, 6 do
       local note = (-21 + x) + g_interval * (6 - y)
-      local hs = note % 12
-      if hs == 0 then
+      local semitone = note % 12
+      if semitone == 0 then
         g:led(x, y, 12)
-      elseif hs == 4 then
-        g:led(x, y, 5)
-      elseif hs == 5 then
-        g:led(x, y, 8)
-      elseif hs == 2 or hs == 7 or hs == 9 or hs == 11 then
-        g:led(x, y, 4)
+      elseif (semitone == 2 or semitone == 4 or semitone == 5 or semitone == 7 or semitone == 9 or semitone == 11) then -- white keys
+        g:led(x, y, 6)
       else
-        g:led(x, y, 2)  
+        g:led(x, y, 2) -- black keys
       end
     end
   end
