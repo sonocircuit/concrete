@@ -11,7 +11,7 @@
 --    /sonocircuit/concrete
 --
 -- or smb into:
--- >> code/concrete/docs
+-- >> code/concrete/doc
 --
 
 
