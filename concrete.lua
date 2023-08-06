@@ -3030,7 +3030,6 @@ end
 
 function drawarc_disconnect()
   arc_is = false
-  hardwareredrawtimer:stop()
   build_menu()
 end
 
