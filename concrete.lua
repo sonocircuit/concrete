@@ -1,4 +1,4 @@
--- concrete v1.0.0 @sonocircuit
+-- concrete v1.1.0 @sonocircuit
 -- llllllll.co/t/concrete
 --
 --    virtual tape exploration
@@ -11,113 +11,146 @@
 --    /sonocircuit/concrete
 --
 -- or smb into:
--- >> code/concrete/doc
+-- >> code/concrete/docs
 --
 
 
 -----------------------------------------------------------------------------------------------------------------------------
--- TODO 1: add crow in
--- TODO 2: add LFOs
+-- TODO: add ji scales
 -----------------------------------------------------------------------------------------------------------------------------
 
-local a = arc.connect()
-local g = grid.connect()
-local m = midi.connect()
+a = arc.connect()
+g = grid.connect()
+m = midi.connect()
 
-local textentry = require 'textentry'
-local mu = require 'musicutil'
+tx = require 'textentry'
+mu = require 'musicutil'
+_lfos = require 'lfo'
 
---local _lfos = include 'lib/concrete_lfo'
+_arc = include 'lib/concrete_arc'
+_key = include 'lib/concrete_key'
+_enc = include 'lib/concrete_enc'
+_draw = include 'lib/concrete_draw'
+--_lfos = include 'lib/concrete_lfo'
+_grd = include 'lib/concrete_grid'
 
 -------- variables --------
-local pset_load = false
-local default_pset = 3
+pset_load = false
+default_pset = 1
 
-local shift = false
-local pageNum = 1
-local focus_page1 = 1
-local focus_page2 = 0
-local focus_page3 = 0
-local param_page3 = 0
-local focus_page4 = 0
+shift = false
+pageNum = 1
+focus_page1 = 1
+focus_page2 = 0
+focus_page3 = 0
+param_page3 = 1
+focus_page4 = 0
+view_message = ""
+msg_timer = nil
 
-local active_splice = 1
-local prev_splice = 1
-local play = false
-local rec = false
-local is_recording = false
-local ext_signal = 1 
-local sos_signal = 0
-local armed = false
+active_splice = 1
+prev_splice = 1
+splice_page = 1
+play = false
+rec = false
+is_recording = false
+ext_signal = 1 
+sos_signal = 0
+armed = false
 
-local save_buffer = false
-local filename_reel = ""
-local reel_path = _path.audio .. "concrete/reels/"
-local splice_path = _path.audio .. "concrete/splices/"
+save_buffer = false
+filename_reel = ""
+reel_path = _path.audio .. "concrete/reels/"
+splice_path = _path.audio .. "concrete/splices/"
+load_reel_ch = 1
+load_splice_ch = 1
 
-local MAX_REEL = 320
-local GENE_NUM = 4
-local ghost_voice = 5
-local rec_voice = 6
-local rec_at_threshold = false
+MAX_REEL = 320
+GENE_NUM = 4
+ghost_voice = 5
+rec_voice = 6
+rec_at_threshold = false
 
-local reel_has_audio = false
-local reel_is_full = false
-local init_recording = true
-local waveviz_reel = false
-local waveviz_splice = false
+reel_has_audio = false
+reel_is_full = false
+init_recording = true
+waveviz_reel = false
+waveviz_splice = false
 
-local glb_level = 1
-local glb_pan = 1
-local glb_cutoff = 1
-local glb_filter_q = 1
-local gbl_rate_slew = 0
+glb_level = 1
+glb_pan = 1
+glb_cutoff = 1
+glb_filter_q = 1
+gbl_rate_slew = 0
 
-local voice_rate = 1
-local prev_morph_val = 0
-local pos_counter = 0
-local gene_length = 10
-local morph_freeze = false
-local morph_clocked = false
-local mclk_div = 1
-local gclk_div = 1
-local rate_rst = false
-local pan_rst = false
+voice_rate = 1
+prev_morph_val = 0
+pos_counter = 0
+gene_length = 10
+morph_freeze = false
+morph_clocked = false
+mclk_div = 1
+gclk_div = 1
+rate_rst = false
+pan_rst = false
 
-local midi_channel = 1
-local midi_root = 60
-local key_root = -21
-local crow_is = false
+-- variables for midi and keys
+midi_channel = 1
+midi_root = 60
+key_root = -21
+crow_is = false
 
-local voicetab = {0, 0, 0, 0}
-local active_notes = {{}, {}, {}, {}}
+voicetab = {0, 0, 0, 0}
+active_notes = {{}, {}, {}, {}}
 
 -- variables for arc
-local arc_is = false
-local arc_off = 0
-local arc_enc1_count = 0
-local arc_vs_sens = 100
+arc_is = false
+arc_off = 0
+arc_enc1_count = 0
+arc_vs_sens = 100
 
 -- variables for grid
-local g_pos_reset = false
-local g_rec_mode = false
-local g_rec_dest = false
-local g_rec_speed = false
-local g_slotinit = false
-local g_slotmod = false
-local g_interval = 4
-local g_voice = 0
-local g_set_env = false
-local dirtygrid = false
+g_pos_reset = false
+g_rec_mode = false
+g_rec_dest = false
+g_rec_speed = false
+g_slotinit = false
+g_slotmod = false
+g_interval_chrom = 5
+g_interval_scale = 4
+g_voice = 0
+g_scale_active = false
+g_note_val = 0
+g_note_rate = 1
+g_set_env = false
+g_lfo_state = false
+g_lfo_rate = false
+g_lfo_depth = false
+g_lfo_shape = false
+dirtygrid = false
+
+-- variable for crow
+crow_smoothing = 0.02 
+crow_val_change = false
+crow_prev_val = {}
+crow_in_mode = {}
+crow_in_thresh = {}
+crow_in_done_action = {}
+for i = 1, 2 do
+  crow_prev_val[i] = 0
+  crow_in_mode[i] = 1
+  crow_in_thresh[i] = false
+  crow_in_done_action[i] = false
+end
 
 -- variables for warble
-local tau = math.pi * 2
-local warble_amount = 0
-local warble_depth = 0
-local warble_freq = 6
-local warble_counter = 1
-local warble_slope = 0
-local warble_active = false
+tau = math.pi * 2
+warble_amount = 0
+warble_depth = 0
+warble_freq = 6
+warble_counter = 1
+warble_slope = 0
+warble_active = false
 
 -- variables for scales
 local oct025 = math.pow(2, -24/12) -- speed == 0.25
@@ -144,7 +177,7 @@ local oct2 = math.pow(2, 24/12) -- speed == 4
 
 
 -------- tables --------
-local options = {}
+options = {}
 options.scale = {"oct", "oct+p4", "oct+p5", "oct+p4+p5"}
 options.crow_input = {"none", "play [trig]", "play [gate]", "restart [trig]", "rec [trig]", "rec [gate]", "add splice [trig]", "next splice [trig]", "prev splice [trig]", "random splice [trig]", "select splice [cv]", "varispeed v/8 [cv]", "slide [cv]", "size [cv]", "morph [cv]"}
 options.crow_output = {"none", "gene ramp [cv]", "loop reset [trig]"}
@@ -155,20 +188,20 @@ options.params = {"level", "pan", "cutoff", "filter_q"}
 options.params_view = {"level", "pan", "cutoff", "filter q"}
 options.rate_slew = {0, 0.05, 0.1, 0.2, 0.5}
 
-local scale = {
+scale = {
   {-oct2, -oct1, -oct0, -oct05, -oct025, oct025, oct05, oct0, oct1, oct2}, -- octaves
   {-oct2, -p4_1, -oct1, -p4,  -oct0, -p4_05, -oct05, -p4_025, -oct025, oct025, p4_025, oct05, p4_05, oct0, p4, oct1, p4_1, oct2}, -- octaves and fifths
   {-oct2, -p5_1, -oct1, -p5,  -oct0, -p5_05, -oct05, -p5_025, -oct025, oct025, p5_025, oct05, p5_05, oct0, p5, oct1, p5_1, oct2}, -- octaves and fifths
   {-oct2, -p5_1, -p4_1, -oct1, -p5, -p4, -oct0, -p4_05, -p5_05, -oct05, -p4_025, -p5_025, -oct025, oct025, p5_025, p4_025, oct05, p5_05, p4_05, oct0, p4, p5, oct1, p4_1, p5_1, oct2} -- octaves + fiths + fourths
 }
 
-local splice = {}
+splice = {}
 splice[1] = {}
 splice[1].s = 1
 splice[1].e = MAX_REEL + 1
 splice[1].l = MAX_REEL
 
-local voice = {}
+voice = {}
 for i = 1, 6 do
   voice[i] = {}
   voice[i].active = true
@@ -184,7 +217,7 @@ for i = 1, 6 do
   voice[i].pos_rel = 0
 end
 
-local g_key = {}
+g_key = {}
 for x = 9, 16 do
   g_key[x] = {}
   for y = 1, 6 do
@@ -194,7 +227,7 @@ for x = 9, 16 do
   end
 end
 
-local state_slot = {}
+state_slot = {}
 for i = 1, 8 do
   state_slot[i] = {}
   state_slot[i].has_data = false
@@ -211,7 +244,7 @@ function load_reel(path)
     if ch > 0 and len > 0 then
       filename_reel = path
       softcut.buffer_clear()
-      softcut.buffer_read_mono(path, 0, 1, -1, 1, 1, 0, 1)
+      softcut.buffer_read_mono(path, 0, 1, -1, load_reel_ch, 1, 0, 1)
       local l = math.min(len / 48000, MAX_REEL)
       init_reel(l)
       print("file loaded: "..path.." is "..l.."s")
@@ -228,12 +261,12 @@ function load_splice(path)
   if ch > 0 and len > 0 then
     if reel_has_audio then
       local start_pos = splice[#splice].e
-      softcut.buffer_read_mono(filename_append, 0, start_pos, -1, 1, 1, 0, 1)
+      softcut.buffer_read_mono(filename_append, 0, start_pos, -1, load_splice_ch, 1, 0, 1)
       local l = math.min(len / 48000, (MAX_REEL - start_pos + 1))
       append_splice(start_pos + l)
       print("splice added: "..filename_append.." is "..l.."s")
     else
-      softcut.buffer_read_mono(filename_append, 0, 1, -1, 1, 1, 0, 1)
+      softcut.buffer_read_mono(filename_append, 0, 1, -1, load_splice_ch, 1, 0, 1)
       local l = math.min(len / 48000, MAX_REEL)
       init_reel(l)
       print("splice added: "..filename_append.." is "..l.."s")
@@ -248,7 +281,6 @@ function save_splice(txt)
   if txt then
     local start = splice[active_splice].s
     local length = splice[active_splice].e - splice[active_splice].s
-    --util.make_dir(_path.audio .. "concrete/splices")
     softcut.buffer_write_mono(_path.audio.."concrete/splices/"..txt..".wav", start, length, 1)
     print("splice saved: " .._path.audio .. "concrete/splices/" .. txt .. ".wav")
   else
@@ -259,7 +291,6 @@ end
 function save_reel(txt)
   if txt then
     local length = splice[#splice].e - 1
-    --util.make_dir(_path.audio .. "concrete/reels")
     softcut.buffer_write_mono(_path.audio.."concrete/reels/"..txt..".wav", 1, length, 1)
     print("reel saved: " .._path.audio .. "concrete/reels/" .. txt .. ".wav")
   else
@@ -351,10 +382,10 @@ function nudge_splice_start(d)
     splice[active_splice - 1].e = splice[active_splice].s
     splice[active_splice - 1].l = splice[active_splice - 1].e - splice[active_splice - 1].s
     splice[active_splice].l = splice[active_splice].e - splice[active_splice].s
+    set_loops()
+    waveviz_splice = true
+    softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
   end
-  set_loops()
-  waveviz_splice = true
-  softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
   --print_markers()
 end
 
@@ -365,10 +396,31 @@ function nudge_splice_end(d)
     splice[active_splice + 1].s = splice[active_splice].e
     splice[active_splice + 1].l = splice[active_splice + 1].e - splice[active_splice + 1].s
     splice[active_splice].l = splice[active_splice].e - splice[active_splice].s
+    set_loops()
+    waveviz_splice = true
+    softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
   end
-  set_loops()
-  waveviz_splice = true
-  softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
+  --print_markers()
+end
+
+function nudge_splice_window(d)
+  local amt = d / 50
+  if active_splice > 1 and active_splice < #splice then
+    -- set start
+    splice[active_splice].s = util.clamp(splice[active_splice].s + amt, splice[active_splice - 1].s + 0.01, splice[active_splice].e - 0.01)
+    splice[active_splice - 1].e = splice[active_splice].s
+    splice[active_splice - 1].l = splice[active_splice - 1].e - splice[active_splice - 1].s
+    -- set end
+    splice[active_splice].e = util.clamp(splice[active_splice].e + amt, splice[active_splice].s + 0.01, splice[active_splice + 1].e - 0.01)
+    splice[active_splice + 1].s = splice[active_splice].e
+    splice[active_splice + 1].l = splice[active_splice + 1].e - splice[active_splice + 1].s
+    -- set lentgh
+    splice[active_splice].l = splice[active_splice].e - splice[active_splice].s
+    -- set loops and viz
+    set_loops()
+    waveviz_splice = true
+    softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
+  end
   --print_markers()
 end
 
@@ -477,6 +529,14 @@ function select_splice(val)
   end
 end
 
+function clear_all_splice_markers()
+  clock.sleep(2)
+  if g_slotmod then
+    init_reel(splice[#splice].e - 1)
+    dirtygrid = true
+  end
+end
+
 -- debug stuff
 function print_markers()
   for i = 1, #splice do
@@ -504,7 +564,8 @@ function set_play()
     set_rec()
     set_levels()
   end
-  page_redraw(1)
+  --page_redraw(1)
+  dirtygrid = true
 end
 
 function toggle_recording()
@@ -518,7 +579,8 @@ function toggle_recording()
     rec = not rec
   end
   set_rec()
-  page_redraw(1)
+  --page_redraw(1)
+  dirtygrid = true
 end
 
 function set_rec()
@@ -545,6 +607,10 @@ function set_rec()
     amp_in[1]:start()
     amp_in[2]:start()
     rec_at_threshold = true
+  elseif not rec and not play then
+    amp_in[1]:stop()
+    amp_in[2]:stop()
+    rec_at_threshold = false
   else
     softcut.rec_level(rec_voice, 0)
     softcut.pre_level(rec_voice, 1)
@@ -575,7 +641,6 @@ function set_levels()
   -- voice levels
   for i = 1, GENE_NUM do
     local level = voice[i].level * glb_level
-    -- if poly_mode then set all gene voices to level regardless of their active state.
     if play and voice[i].active then
       softcut.level(i, level)
     else
@@ -647,7 +712,7 @@ function set_panning()
   end
 end
 
-local delta_viz_fc = "<  >"
+delta_viz_fc = "<  >"
 function set_cutoff(d)
   local min = math.min(voice[1].fc, voice[2].fc, voice[3].fc, voice[4].fc)
   local max = math.max(voice[1].fc, voice[2].fc, voice[3].fc, voice[4].fc)
@@ -669,7 +734,7 @@ function set_cutoff(d)
   end
 end
 
-local delta_viz_fq = "<  >"
+delta_viz_fq = "<  >"
 function set_filter_q(d)
   local min = math.min(voice[1].fq, voice[2].fq, voice[3].fq, voice[4].fq)
   local max = math.max(voice[1].fq, voice[2].fq, voice[3].fq, voice[4].fq)
@@ -813,7 +878,7 @@ function set_start_pos()
   end
 
   set_levels()
-  page_redraw(1)
+  --page_redraw(1)
 end
 
 function set_loops()
@@ -1055,10 +1120,10 @@ end
 
 
 -------- waveforms --------
-local waveform_reel_samples = {}
-local waveform_splice_samples = {}
-local wave_reel_gain = 1
-local wave_splice_gain = 1
+waveform_reel_samples = {}
+waveform_splice_samples = {}
+wave_reel_gain = 1
+wave_splice_gain = 1
 
 function wave_render(ch, start, i, s)
   if waveviz_reel then
@@ -1088,7 +1153,7 @@ end
 
 
 -------- envelopes --------
-local env = {}
+env = {}
 env.attack = 0
 env.decay = 0
 env.sustain = 1
@@ -1303,28 +1368,121 @@ function midi_events(data)
   end
 end
 
-function set_midi_event_callback()
+function set_midi_event_callback() -- TODO! --> see steve's implem on llllllllll
   midi.cleanup()
   m.event = midi_events
 end
 
 
+-------- scales --------
+function build_scale(current_scale)
+  scale_notes = {}
+  scale_notes = mu.generate_scale_of_length(midi_root - 24, current_scale, 60)
+end
+
+
 -------- crow --------
-function crow_in_change(v)
-  print(v)
+function crow_in_stream_1(v)
+  crow_in_handle(v, 1)
 end
 
-function crow_in_stream(v)
-  print(v)
+function crow_in_stream_2(v)
+  crow_in_handle(v, 2)
 end
 
-function set_crow_input(ch, mode)
-  print(ch)
-  print(mode)
+function crow_in_handle(v, i)
+  if (v > crow_prev_val[i] + crow_smoothing) or (v < crow_prev_val[i] - crow_smoothing) then
+    crow_prev_val[i] = v
+    crow_val_change = true
+    --print(i.." is at "..crow_prev_val[i])
+  else
+    crow_val_change = false
+  end
+  local mode = crow_in_mode[i]
+
+  if mode > 1 and mode < 11 then
+    -- set theshold
+    if crow_prev_val[i] >= 4 and not crow_in_thresh[i] then
+      crow_in_thresh[i] = true
+    elseif crow_prev_val[i] < 4 and crow_in_thresh[i] then
+      crow_in_thresh[i] = false
+    end
+    -- make action
+    if mode == 3 or mode == 6 then
+      if crow_in_thresh[i] and not crow_in_done_action[i] then
+        if mode == 3 then
+          set_play()
+        elseif mode == 6 then
+          toggle_recording()
+        end
+        crow_in_done_action[i] = true
+      elseif not crow_in_thresh[i] and crow_in_done_action[i] then
+        if mode == 3 then
+          set_play()
+        elseif mode == 6 then
+          toggle_recording()
+        end
+        crow_in_done_action[i] = false
+      end
+    else
+      if crow_in_thresh[i] and not crow_in_done_action[i] then
+        if mode == 2 then
+          set_play()
+        elseif mode == 4 then
+          set_start_pos()
+        elseif mode == 5 then
+          toggle_recording()
+        elseif mode == 7 then
+          add_splice()
+        elseif mode == 8 then
+          set_active_splice(1)
+        elseif mode == 9 then
+          set_active_splice(-1)
+        elseif mode == 10 then
+          set_random_splice()
+        end
+        crow_in_done_action[i] = true
+      elseif not crow_in_thresh[i] then
+        crow_in_done_action[i] = false
+      end
+    end
+  elseif mode > 10 then
+    if crow_val_change then
+      if mode == 11 then -- select splice
+        local volt = util.clamp(crow_prev_val[i], 0, 5)
+        local val = util.round(util.linlin(0, 5, 0, 1, volt), 0.01)
+        select_splice(val)
+      elseif mode == 12 then -- varispeed
+        if crow_prev_val[i] > 0 then
+          local volt = util.clamp(crow_prev_val[i], 0, 5)
+          local v8 = util.round(volt, 1/12) - 36/12
+          local val = math.pow(2, v8)
+          params:set("varispeed", val)
+        elseif crow_prev_val[i] < 0 then
+          local volt = -util.clamp(crow_prev_val[i], -5, 0)
+          local v8 = util.round(volt, 1/12) - 36/12
+          local val = -math.pow(2, v8)
+          params:set("varispeed", val)
+        end
+      elseif mode == 13 then -- slide
+        local volt = util.clamp(crow_prev_val[i], 0, 5)
+        local val = util.round(util.linlin(0, 5, 0, 1, volt), 0.01)
+        params:set("slide", val)
+      elseif mode == 14 then -- size
+        local volt = util.clamp(crow_prev_val[i], 0, 5)
+        local val = 1 - util.round(util.linlin(0, 5, 0, 1, volt), 0.01)
+        params:set("gene_size", val)
+      elseif mode == 15 then -- morph
+        local volt = util.clamp(crow_prev_val[i], 0, 5)
+        local val = util.round(util.linlin(0, 5, 0, 1, volt), 0.01)
+        params:set("morph", val)
+      end
+    end
+  end
 end
 
 -------- helpers --------
-function round_form(param, quant, form)
+local function round_form(param, quant, form)
   return(util.round(param, quant)..form)
 end
 
@@ -1338,10 +1496,30 @@ function get_active_voices()
   return active_voices
 end
 
+function get_value_bipolar(lfo_id, param_id)
+  if lfo_id:get('depth') > 0 then
+    return params:lookup_param(param_id).controlspec:map(lfo_id:get('scaled')/2 + params:get_raw(param_id))
+  else
+    return params:lookup_param(param_id).controlspec:map(params:get_raw(param_id))
+  end
+end
+
 
 -------- init --------
 function init()
 
+  -- populate scale_names table
+  scale_names = {}
+  for i = 1, #mu.SCALES - 1 do
+    table.insert(scale_names, string.lower(mu.SCALES[i].name))
+  end
+
+  -- populate scale intervals
+  scale_intervals = {}
+  for i = 1, #mu.SCALES - 1 do
+    scale_intervals[i] = {table.unpack(mu.SCALES[i].intervals)}
+  end
+  
   build_midi_device_list()
 
   if util.file_exists(reel_path) == false then
@@ -1353,12 +1531,12 @@ function init()
   end
 
   -- crow params
-  params:add_group("crow_params",  "CROW", 4)
+  params:add_group("crow_params",  "CROW", 6)
 
-  --for i = 1, 2 do
-    --params:add_option("crow_in_"..i, "input "..i, options.crow_input, 1)
-    --params:set_action("crow_in_"..i, function(mode) set_crow_input(i, mode) end)
-  --end
+  for i = 1, 2 do
+    params:add_option("crow_in_"..i, "input "..i, options.crow_input, 1)
+    params:set_action("crow_in_"..i, function(mode) crow_in_mode[i] = mode end)
+  end
 
   for i = 1, 4 do
     params:add_option("crow_out_"..i, "output "..i, options.crow_output, 1)
@@ -1376,13 +1554,16 @@ function init()
   -- reel params
   params:add_separator("reel", "reel")
 
-  params:add_group("load_save_reel", "load & save", 4)
+  params:add_group("load_save_reel", "load & save", 5)
 
   params:add_file("load_reel", "> load reel", "")
   params:set_action("load_reel", function(path) load_reel(path) end)
 
   params:add_trigger("save_reel", "< save reel")
-  params:set_action("save_reel", function() textentry.enter(save_reel) end)
+  params:set_action("save_reel", function() tx.enter(save_reel) end)
+
+  params:add_option("load_reel_channel", "? select channel", {"left", "right"}, 1)
+  params:set_action("load_reel_channel", function(x) load_reel_ch = x end)
 
   params:add_option("save_buffer_pset", "? save reel with pset", {"no", "yes"}, 2)
   params:set_action("save_buffer_pset", function(x) save_buffer = x == 2 and true or false end)
@@ -1408,25 +1589,28 @@ function init()
   params:add_control("rec_threshold", "threshold", controlspec.new(-40, 6, 'lin', 0, -12, "dB"))
 
   params:add_control("sos_level", "s.o.s level", controlspec.new(0, 1, "lin", 0, 0.8), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-  params:set_action("sos_level", function(val) sos_signal = val set_levels() page_redraw(1) end)
+  params:set_action("sos_level", function(val) sos_signal = val set_levels() end) -- page_redraw(1)
 
   params:add_control("rec_level", "rec level", controlspec.new(0, 1, "lin", 0, 1), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
   params:set_action("rec_level", function() set_rec() end)
 
   params:add_control("dub_level", "overdub level", controlspec.new(0, 1, "lin", 0, 0.8), function(param) return (round_form(util.linlin(0, 1, 0, 100, param:get()), 1, "%")) end)
-  params:set_action("dub_level", function() set_rec() page_redraw(1) end)
+  params:set_action("dub_level", function() set_rec() end) -- page_redraw(1)
 
   params:add_option("ghost_rec", "record ghost", {"no", "yes"}, 2)
 
-  params:add_group("splice_params", "splices", 16)
+  params:add_group("splice_params", "splices", 17)
 
   params:add_separator("splice_audio_params", "audio")
 
   params:add_file("append_file", ">> append splice to reel", "")
   params:set_action("append_file", function(path) load_splice(path) end)
 
+  params:add_option("load_splice_channel", "? select channel", {"left", "right"}, 1)
+  params:set_action("load_splice_channel", function(x) load_splice_ch = x end)
+
   params:add_trigger("save_splice", "<< save active splice")
-  params:set_action("save_splice", function() textentry.enter(save_splice) end)
+  params:set_action("save_splice", function() tx.enter(save_splice) end)
 
   params:add_binary("flip_splice_param", "> reverse active splice", "trigger", 0)
   params:set_action("flip_splice_param", function() flip_splice() end)
@@ -1542,7 +1726,7 @@ function init()
   params:add_control("cutoff"..ghost_voice, "filter cutoff", controlspec.new(20, 18000, 'exp', 1, 4600, "Hz"))
   params:set_action("cutoff"..ghost_voice, function(x) softcut.post_filter_fc(ghost_voice, x) end)
 
-  params:add_control("filter_q"..ghost_voice, "filter q", controlspec.new(0.1, 4.0, 'exp', 0.01, 2.0, ""))
+  params:add_control("filter_q"..ghost_voice, "filter q", controlspec.new(0.1, 4.0, 'lin', 0.01, 2.0, ""))
   params:set_action("filter_q"..ghost_voice, function(x) softcut.post_filter_rq(ghost_voice, x) end)
 
   params:add_option("filter_type"..ghost_voice, "filter type", {"low pass", "high pass", "band pass", "band reject", "off"}, 1)
@@ -1598,22 +1782,31 @@ function init()
   -- keyboard params
   params:add_separator("keyboard_params",  "keyboard midi/grid")
 
+  params:add_option("keyboard_type", "keyboard type", {"chromatic", "scale"}, 1)
+  params:set_action("keyboard_type", function(mode) g_scale_active = mode == 2 and true or false build_menu() dirtygrid = true end)
+
+  params:add_option("keys_scale", "scale type", scale_names, 2)
+  params:set_action("keys_scale", function(val) build_scale(val) current_scale = val dirtygrid = true end)
+
+  params:add_number("grid_interval_chrom", "interval [y]", 2, 6, 5, function(param) return param:get().."st" end)
+  params:set_action("grid_interval_chrom", function(val) g_interval_chrom = val dirtygrid = true end)
+
+  params:add_number("grid_interval_scale", "interval [y]", 1, 8, 4, function(param) return param:get().."deg" end)
+  params:set_action("grid_interval_scale", function(val) g_interval_scale = val - 1 dirtygrid = true end)
+
+  params:add_option("keys_mode", "voice allocation", {"mono", "poly"}, 1)
+
+  params:add_number("root_note", "root note", 1, 127, 60, function(param) return mu.note_num_to_name(param:get(), true) end)
+  params:set_action("root_note", function(val) midi_root = val key_root = val - 81 dirtygrid = true end)
+
   params:add_option("midi_device", "midi device", midi_devices, 1)
   params:set_action("midi_device", function(val) m = midi.connect(val) set_midi_event_callback() end)
 
   params:add_number("midi_channel", "midi channel", 1, 16, 1)
   params:set_action("midi_channel", function(val) midi_channel = val end)
 
-  params:add_number("root_note", "root note", 1, 127, 60, function(param) return mu.note_num_to_name(param:get(), true) end)
-  params:set_action("root_note", function(val) midi_root = val key_root = val - 81 dirtygrid = true end)
-
-  params:add_number("grid_interval", "interval [y]", 2, 6, 4, function(param) return param:get().."st" end)
-  params:set_action("grid_interval", function(val) g_interval = val dirtygrid = true end)
-
-  params:add_option("keys_mode", "mode", {"mono", "poly"}, 1)
-
   params:add_option("adsr_active", "envelope", {"off", "on"}, 1)
-  params:set_action("adsr_active", function() init_envelope() end)
+  params:set_action("adsr_active", function() init_envelope() dirtygrid = true end)
 
   params:add_group("env_settings", "envelope settings", 4)
 
@@ -1629,51 +1822,57 @@ function init()
   params:add_control("adsr_release", "release", controlspec.new(0, 10, 'lin', 0.1, 1, "s"))
   params:set_action("adsr_release", function(val) env.release = val * 10 end)   
 
-  --[[
  -- lfo params
- params:add_separator("modulation", "modulation")
+  params:add_separator("modulation", "modulation")
 
- local gene_id = {"[one]", "[two]", "[three]", "[four]", "[ghost]"}
- params:add_group("level_lfos", "level lfos", 15 * (GENE_NUM + 1))
- local level_lfo = {}
- for i = 1, GENE_NUM + 1 do
-   level_lfo[i] = _lfos:add{min = 0, max = 1}
-   level_lfo[i]:add_params("level_lfo"..i, "playhead "..gene_id[i].." level")
-   level_lfo[i]:set("action", function(scaled, raw) params:set("level"..i, scaled) end)
- end
+  local gene_id = {"[one]", "[two]", "[three]", "[four]", "[ghost]"}
+  params:add_group("level_lfos", "level lfos", 15 * (GENE_NUM + 1))
+  local level_lfo = {}
+  for i = 1, GENE_NUM + 1 do
+    level_lfo[i] = _lfos:add{min = 0, max = 1}
+    level_lfo[i]:add_params("level_lfo"..i, "playhead "..gene_id[i].." level")
+    level_lfo[i]:set("action", function(scaled, raw) params:set("level"..i, scaled) end)
+  end
 
- params:add_group("pan_lfos", "pan lfos", 15 * (GENE_NUM + 1))
- local pan_lfo = {}
- for i = 1, GENE_NUM + 1 do
-   pan_lfo[i] = _lfos:add{min = -1, max = 1}
-   pan_lfo[i]:add_params("pan_lfo"..i, "playhead "..gene_id[i].." pan")
-   pan_lfo[i]:set("action", function(scaled, raw) params:set("pan"..i, scaled) end)
- end
+  params:add_group("pan_lfos", "pan lfos", 15 * (GENE_NUM + 1))
+  local pan_lfo = {}
+  for i = 1, GENE_NUM + 1 do
+    pan_lfo[i] = _lfos:add{min = -1, max = 1, baseline = 'center'}
+    pan_lfo[i]:add_params("pan_lfo"..i, "playhead "..gene_id[i].." pan")
+    pan_lfo[i]:set("action", function(scaled, raw) params:set("pan"..i, scaled) end)
+  end
 
- params:add_group("cutoff_lfos", "cutoff lfos", 15 * (GENE_NUM + 1))
- local cutoff_lfo = {}
- for i = 1, GENE_NUM + 1 do
-   cutoff_lfo[i] = _lfos:add{min = 20, max = 18000}
-   cutoff_lfo[i]:add_params("cutoff_lfo"..i, "playhead "..gene_id[i].." cutoff")
-   cutoff_lfo[i]:set("action", function(scaled, raw) params:set("cutoff"..i, scaled) end)
- end
+  params:add_group("cutoff_lfos", "cutoff lfos", 15 * (GENE_NUM + 1))
+  local cutoff_lfo = {}
+  for i = 1, GENE_NUM + 1 do
+    cutoff_lfo[i] = _lfos:add{min = 20, max = 18000}
+    cutoff_lfo[i]:add_params("cutoff_lfo"..i, "playhead "..gene_id[i].." cutoff")
+    cutoff_lfo[i]:set("action", function(scaled, raw) params:set("cutoff"..i, scaled) end)
+  end
 
- local varispeed_lfo = _lfos:add{min = -4, max = 4}
- varispeed_lfo:add_params("varispeed_lfo", "varispeed", "varispeed lfo")
- varispeed_lfo:set("action", function(scaled, raw) params:set("varispeed", scaled) end)
+  params:add_group("filter_q_lfos", "filter q lfos", 15 * (GENE_NUM + 1))
+  local filter_q_lfo = {}
+  for i = 1, GENE_NUM + 1 do
+    filter_q_lfo[i] = _lfos:add{min = 0.01, max = 4}
+    filter_q_lfo[i]:add_params("filter_q_lfo"..i, "playhead "..gene_id[i].." filter q")
+    filter_q_lfo[i]:set("action", function(scaled, raw) params:set("filter_q"..i, scaled) end)
+  end
 
- local slide_lfo = _lfos:add{min = 0, max = 1}
- slide_lfo:add_params("slide_lfo", "slide", "slide lfo")
- slide_lfo:set("action", function(scaled, raw) params:set("slide", scaled) end)
+  local varispeed_lfo = _lfos:add{min = -4, max = 4, baseline = 'center'}
+  varispeed_lfo:add_params("varispeed_lfo", "varispeed", "varispeed lfo")
+  varispeed_lfo:set("action", function(scaled, raw) params:set("varispeed", scaled) end)
 
- local gene_size_lfo = _lfos:add{min = 0, max = 1}
- gene_size_lfo:add_params("gene_size_lfo", "size", "size lfo")
- gene_size_lfo:set("action", function(scaled, raw) params:set("gene_size", scaled) end)
+  local slide_lfo = _lfos:add{min = 0, max = 1}
+  slide_lfo:add_params("slide_lfo", "slide", "slide lfo")
+  slide_lfo:set("action", function(scaled, raw) params:set("slide", scaled) end)
 
- local morph_lfo = _lfos:add{min = 0, max = 1}
- morph_lfo:add_params("morph_lfo", "morph", "morph lfo")
- morph_lfo:set("action", function(scaled, raw) params:set("morph", scaled) end)
- ]]
+  local gene_size_lfo = _lfos:add{min = 0, max = 1}
+  gene_size_lfo:add_params("gene_size_lfo", "size", "size lfo")
+  gene_size_lfo:set("action", function(scaled, raw) params:set("gene_size", scaled) end)
+
+  local morph_lfo = _lfos:add{min = 0, max = 1}
+  morph_lfo:add_params("morph_lfo", "morph", "morph lfo")
+  morph_lfo:set("action", function(scaled, raw) params:set("morph", scaled) end)
  
   -- init softcut settings
   for i = 1, GENE_NUM do -- genes 1 - 4
@@ -1768,7 +1967,7 @@ function init()
     print("finished writing pset:'"..name.."'")
   end
 
-  params.action_read = function(filename, silent, number) -- find out why silent returns nil
+  params.action_read = function(filename, silent, number)
     local loaded_file = io.open(filename, "r")
     if loaded_file then
       io.input(loaded_file)
@@ -1790,9 +1989,8 @@ function init()
       softcut.render_buffer(1, 1, splice[#splice].e - 1, 128)
       clock.run(
         function()
-          clock.sleep(0.1)
-          waveviz_splice = true
-          softcut.render_buffer(1, splice[active_splice].s, splice[active_splice].l, 128)
+          clock.sleep(0.2)
+          set_active_splice(0)
         end
       )
       params:set("adsr_active", 1)
@@ -1828,6 +2026,10 @@ function init()
   -- detect if crow is connected
   if norns.crow.connected() then
     crow_is = true
+    crow.input[1].stream = crow_in_stream_1
+    crow.input[1].mode("stream", 0.01)
+    crow.input[2].stream = crow_in_stream_2
+    crow.input[2].mode("stream", 0.01)
   end
 
   -- metros
@@ -1847,16 +2049,9 @@ function init()
   ghostclock = clock.run(ghost_activity)
   envcounter = clock.run(env_run)
 
-  -- bang params
-  if pset_load then
-    params:read(default_pset)
-  else
-    params:bang()
-  end
-
   -- threshold rec poll
   amp_in = {}
-  local amp_src = {"amp_in_l", "amp_in_r"}
+  amp_src = {"amp_in_l", "amp_in_r"}
   for ch = 1, 2 do
     amp_in[ch] = poll.set(amp_src[ch])
     amp_in[ch].time = 0.01
@@ -1874,6 +2069,13 @@ function init()
         rec_at_threshold = false
       end
     end
+  end
+
+  -- bang params
+  if pset_load then
+    params:read(default_pset)
+  else
+    params:bang()
   end
   
   -- set defaults
@@ -1900,7 +2102,7 @@ function poll_positions(i, pos)
     if pos_counter >= util.round(gene_length, 0.01) * 100 then
       set_start_pos()
     end
-    page_redraw(1)
+    --page_redraw(1)
   end
   -- ensure that recording stops when the rec head reaches the end of the reel.
   if i == rec_voice and is_recording and (params:get("rec_dest") == 3 or init_recording) then
@@ -1916,1061 +2118,35 @@ end
 
 -------- norns UI --------
 function key(n, z)
-  if n == 1 then
-    shift = z == 1 and true or false
-  end
-  if pageNum == 1 then
-    if n == 2 and z == 1 and not shift then
-      focus_page1 = 1 - focus_page1
-    end
-    if focus_page1 == 0 then
-      if n == 3 and z == 1 then
-        if shift then
-          remove_splice()
-        else
-          if play then
-            add_splice()
-          end
-        end
-      end
-    else
-      if n == 2 and z == 1 then
-        if shift then
-          amp_in[1]:start()
-          amp_in[2]:start()
-          rec_at_threshold = true
-        end
-      elseif n == 3 and z == 1 then
-        if shift then
-          toggle_recording()
-        else
-          set_play()
-        end
-      end
-    end
-  elseif pageNum == 2 then
-    if n == 2 and z == 1 and not shift then
-      focus_page2 = 1 - focus_page2
-    end
-    if focus_page2 == 0 then
-      if n == 3 then
-        if shift then
-          if z == 1 then
-            params:delta("morph_freez", 1)
-            reset_morph_params()
-          end
-        else
-          if z == 1 then
-            prev_morph_val = params:get("morph")
-            params:set("morph", 1)
-          elseif z == 0 then
-            params:set("morph", prev_morph_val)
-          end
-        end
-      end
-    else
-      if n == 3 and z == 1 then
-        params:set("varispeed", -voice_rate)       
-      end
-    end
-  elseif pageNum == 3 then
-    if n == 2 and z == 1 then
-      focus_page3 = 1 - focus_page3
-    elseif n == 3 and z == 1 then
-      param_page3 = (param_page3 + 1) % 4
-    end
-  elseif pageNum == 4 then
-    if n == 2 and z == 1 then
-      focus_page4 = 1 - focus_page4
-    end
-  end
-  dirtyscreen = true
+  _key.action(n, z)
 end
 
 function enc(n, d)
-  if n == 1 then
-    if shift then
-      params:delta("global_level", d)
-    else
-      local last_page = params:get("adsr_active") == 1 and 3 or 4
-      pageNum = util.clamp(pageNum + d, 1, last_page)
-      dirtygrid = true
-    end
-  end
-  if pageNum == 1 then
-    if focus_page1 == 0 then
-      if n == 2 then
-        if shift then
-          nudge_splice_start(d)
-        else
-          local add = d / 20
-          for i = 1, GENE_NUM do
-            local curr_pos = voice[i].pos_abs
-            local new_pos = curr_pos + add
-            softcut.position(i, new_pos)
-          end
-        end        
-      elseif n == 3 then
-        if shift then
-          nudge_splice_end(d)
-        else
-          local inc = d > 0 and 1 or - 1
-          set_active_splice(inc)
-        end
-      end
-    else
-      if n == 2 then
-        if shift then
-          params:delta("rec_dest", d)
-        else
-          params:delta("sos_level", d)
-        end
-      elseif n == 3 then
-        if shift then
-          params:delta("rec_mode", d)
-        else
-          params:delta("dub_level", d)
-        end
-      end
-    end
-  elseif pageNum == 2 then
-    if focus_page2 == 0 then
-      if n == 2 then
-        params:delta("morph", d)
-      elseif n == 3 then
-        params:delta("gene_size", d)
-      end
-    else
-      if n == 2 then
-        if shift then
-          local idx = util.clamp(get_snap(d), 1, #scale[params:get("scale")])
-          local rate = scale[params:get("scale")][idx]
-          params:set("varispeed", rate)
-        else
-          params:delta("varispeed", d / 20)
-        end
-      elseif n == 3 then
-        params:delta("slide", d)
-      end
-    end
-  elseif pageNum == 3 then
-    local i = focus_page3 == 0 and 1 or 3
-    local parameter = options.params[param_page3 + 1]
-    local glb_param = options.params_gbl[param_page3 + 1]
-    if n == 2 then
-      if shift then
-        params:delta(glb_param, d)
-      else
-        params:delta(parameter..i, d)
-      end
-    elseif n == 3 then
-      if not shift then
-        params:delta(parameter..i + 1, d)
-      end
-    end
-  elseif pageNum == 4 then
-    if focus_page4 == 0 then
-      if n == 2 then
-        params:delta("adsr_attack", d)
-      elseif n == 3 then
-        params:delta("adsr_decay", d)
-      end
-    else
-      if n == 2 then
-        params:delta("adsr_sustain", d)
-      elseif n == 3 then
-        params:delta("adsr_release", d)
-      end
-    end
-  end
-  dirtyscreen = true
+  _enc.delta(n, d)
 end
 
 function redraw()
-  screen.clear()
-  -- shift indicator
-  screen.level(shift and 15 or 0)
-  screen.rect(126, 1, 2, 2)
-  screen.fill()
-
-  if pageNum == 1 then
-    screen.level(focus_page1 == 0 and 15 or 4)
-
-    -- reel window
-    screen.line_width(1)
-    screen.move(4, 4)
-    screen.line_rel(120, 0)
-    screen.move(4, 21)
-    screen.line_rel(120, 0)
-    screen.stroke()
-
-    -- waveform
-   if not reel_has_audio then
-      screen.level(15)
-      screen.move(64, 14)
-      screen.text_center("load or record")
-    else
-      screen.level(6)
-      local x_pos = 0
-      for i, s in ipairs(waveform_reel_samples) do
-        local height = util.round(math.abs(s) * (8 / wave_reel_gain))
-        screen.move(util.linlin(0, 128 , 5, 124, x_pos), 12 - height)
-        screen.line_rel(0, 2 * height)
-        screen.stroke()
-        x_pos = x_pos + 1
-      end
-      screen.stroke()
-    end
-
-    -- splice markers and indicator in reel window
-    screen.level(15)
-    if #splice > 1 then
-      for i = 2, #splice do
-        screen.move(util.linlin(1 , splice[#splice].e, 4, 124, splice[i].s), 4)
-        screen.line_rel(0, 16)
-        screen.stroke()
-      end
-      local splice_start = util.linlin(1, splice[#splice].e, 4, 124, splice[active_splice].s)
-      local splice_end = util.linlin(1, splice[#splice].e, 4, 124, splice[active_splice].e)
-      screen.level(focus_page1 == 0 and 15 or 4)
-      screen.line_width(3)
-      screen.move(splice_start, 25)
-      screen.line_rel(splice_end - splice_start + 1, 0)
-      screen.stroke()
-    end
-
-    -- active splice window
-    screen.line_width(1)
-    screen.move(24, 30)
-    screen.line_rel(80, 0)
-    screen.move(24, 61)
-    screen.line_rel(80, 0)
-    screen.stroke()
-
-    if is_recording then
-      screen.level(15)
-      screen.rect(24, 7, 78, 10)
-      screen.fill()
-      screen.level(0)
-      screen.move(64, 14)
-      screen.text_center("recording...")
-    end
-
-    -- waveform
-    if reel_has_audio then
-      screen.level(6)
-      local x_pos = 0
-      for i, s in ipairs(waveform_splice_samples) do
-        local height = util.round(math.abs(s) * (15 / wave_splice_gain))
-        screen.move(util.linlin(0, 128 , 25, 104, x_pos), 45 - height)
-        screen.line_rel(0, 2 * height)
-        screen.stroke()
-        x_pos = x_pos + 1
-      end
-      screen.stroke()
-    end
-
-    -- rec_voice write head
-    if is_recording then
-      screen.level(0)
-      screen.move(util.linlin(0, 1, 25, 105, voice[rec_voice].pos_rel), 30)
-      screen.line_rel(0, 30)
-      screen.stroke()
-    end
-
-    -- gene 4 playhead
-    if voice[4].level > 0 then
-      screen.level(init_recording and 0 or 2)
-      screen.move(util.linlin(0, 1, 25, 105, voice[4].pos_rel), 30)
-      screen.line_rel(0, 30)
-      screen.stroke()
-    end
-
-    -- gene 3 playhead
-    if voice[3].level > 0 then
-      screen.level(init_recording and 0 or 4)
-      screen.move(util.linlin(0, 1, 25, 105, voice[3].pos_rel), 30)
-      screen.line_rel(0, 30)
-      screen.stroke()
-    end
-
-    -- gene 2 playhead
-    if voice[2].level > 0 then
-      screen.level(init_recording and 0 or 6)
-      screen.move(util.linlin(0, 1, 25, 105, voice[2].pos_rel), 30)
-      screen.line_rel(0, 30)
-      screen.stroke()
-    end
-
-    -- gene 1 playhead
-    if voice[1].level > 0 then
-      screen.level(init_recording and 0 or 15)
-      screen.move(util.linlin(0, 1, 25, 105, voice[1].pos_rel), 30)
-      screen.line_rel(0, 30)
-      screen.stroke()
-    end
-
-    -- rec key
-    --screen.level(focus_page1 == 1 and 15 or 4)
-    screen.level(rec_at_threshold and 6 or (focus_page1 == 1 and 15 or 4))
-    if rec or rec_at_threshold then
-      screen.rect(3, 30, 17, 13)
-      screen.fill()
-    end
-    screen.level(15)
-    screen.rect(4, 30, 17, 13)
-    screen.stroke()
-    screen.level(focus_page1 == 1 and 15 or 4)
-    if rec then screen.level(0) end
-    screen.move(10, 38)
-    if g_rec_speed then
-      if params:get("rec_rate") == 1 then
-        screen.text("F")
-      elseif params:get("rec_rate") == 2 then
-        screen.text("C")
-      else
-        screen.text("H")
-      end
-    else
-      screen.text("R")
-    end
-
-    if (shift and focus_page1 == 1) or g_rec_dest then
-      if params:get("rec_dest") == 1 then
-        screen.move(10, 40)
-        screen.text("_")
-      elseif params:get("rec_dest") == 2 then
-        screen.move(8, 38)
-        screen.text("|")
-        screen.move(15, 38)
-        screen.text("|")
-      else
-        screen.move(15, 38)
-        screen.text(">")        
-      end
-    end
-    
-    -- play key
-    screen.level(focus_page1 == 1 and 15 or 4)
-    if play then
-      screen.rect(3, 48, 17, 13)
-      screen.fill()
-    end
-    screen.level(15)
-    screen.rect(4, 48, 17, 13)
-    screen.stroke()
-    screen.level(focus_page1 == 1 and 15 or 4)
-    if play then screen.level(0) end
-    screen.move(10, 56)
-    screen.text("P")
-
-    -- s.o.s /rec level
-    screen.level(15)
-    screen.rect(108, 30, 6, 31)
-    screen.stroke()
-    screen.level(focus_page1 == 1 and 15 or 4)
-    screen.rect(108, 60, 5, -util.linlin(0, 1, 0, 30, params:get("sos_level")))
-    screen.fill()
-
-    if params:get("rec_mode") == 2 then
-      screen.level(0)
-      for i = 1, 31, 2 do
-        screen.move(108, i + 28)
-        screen.line_rel(5, 0)
-        screen.stroke()
-      end
-    end
-    
-    screen.level(15)
-    screen.move(108, 61 - util.linlin(0, 1, 0, 31, params:get("sos_level")))
-    screen.line_rel(5, 0)
-    screen.stroke()
-    
-    -- overdub level
-    screen.level(15)
-    screen.rect(118, 30, 6, 31)
-    screen.stroke()
-    screen.level(focus_page1 == 1 and 15 or 4)
-    screen.rect(118, 60, 5, -util.linlin(0, 1, 0, 30, params:get("dub_level")))
-    screen.fill()
-    
-    screen.level(15)
-    screen.move(118, 61 - util.linlin(0, 1, 0, 31, params:get("dub_level")))
-    screen.line_rel(5, 0)
-    screen.stroke()
-
-  elseif pageNum == 2 then
-
-    -- morph level
-    screen.level(15)
-    screen.line_width(1)
-    screen.rect(4, 4, 16, 50)
-    screen.stroke()
-    screen.level(focus_page2 == 0 and 15 or 4)
-    screen.rect(4, 53, 15, - util.linlin(0, 1, 0, 49, params:get("morph")))
-    screen.fill()
-    screen.move(0, 62)
-    screen.font_face(1)
-    screen.font_size(8)
-    screen.text("morph")
-    if morph_freeze then
-      screen.level(0)
-      for i = 1, 24 do
-        screen.move(4, 54 - i * 2) 
-        screen.line_rel(15, 0)
-        screen.stroke()
-      end
-    end
-    screen.level(15)
-    screen.move(4, 54 - util.linlin(0, 1, 0, 50, params:get("morph")))
-    screen.line_rel(15, 0)
-    screen.stroke()
-
-    -- gene size
-    screen.level(15)
-    screen.rect(108, 4, 16, 50)
-    screen.stroke()
-    screen.level(focus_page2 == 0 and 15 or 4)
-    screen.rect(108, 4, 15, util.linlin(0, 1, 0, 49, params:get("gene_size")))
-    screen.fill()
-    screen.move(107, 62)
-    screen.font_face(1)
-    screen.font_size(8)
-    screen.text("size")
-    
-    screen.level(15)
-    screen.move(108, 4 + util.linlin(0, 1, 0, 50, params:get("gene_size")))
-    screen.line_rel(15, 0)
-    screen.stroke()
-
-    -- varispeed
-    screen.level(focus_page2 == 1 and 15 or 4)
-    screen.move(64, 10)
-    screen.font_size(8)
-    screen.text_center("va r i  s p e ed")
-
-    screen.line_width(2)
-    screen.level(voice_rate < 0 and 15 or 4)
-    screen.move(28, 18)
-    screen.line_rel(35, 0)
-    screen.stroke()
-
-    screen.level(voice_rate > 0 and 15 or 4)
-    screen.move(63, 18)
-    screen.line_rel(35, 0)
-    screen.stroke()
-
-    screen.level(focus_page2 == 1 and 15 or 4)
-    screen.move(util.linlin(-4, 4, 28, 98, voice_rate), 13)
-    screen.line_rel(0, 10)
-    screen.stroke()
-
-    -- slide
-    screen.level(focus_page2 == 1 and 10 or 4)
-    screen.move(28, 46)
-    screen.line_rel(71, 0)
-    screen.move(util.linlin(0, 1, 28, 98, params:get("slide")), 41)
-    screen.line_rel(0, 10)
-    screen.stroke()
-
-    screen.move(64, 38)
-    screen.font_size(8)
-    screen.text_center("s l  i   d    e")
-    
-  elseif pageNum == 3 then
-    local param_name = options.params_view[param_page3 + 1]
-    local parameter = options.params[param_page3 + 1]
-    screen.level(15)
-    screen.move(64, 34)
-    screen.text_center(param_name)
-    -- draw boxes
-    screen.line_width(1)
-    for i = 1, 2 do
-      for j = 1, 2 do
-        screen.rect(8 + (i - 1) * 63, 8 + (j - 1) * 32, 50, 16)
-        screen.stroke()
-      end
-    end
-
-    -- draw levels voice 1 + 2
-    for i = 1, 2 do
-      local off_x = (i - 1) * 63
-      if parameter == "level" then
-        screen.level(focus_page3 == 0 and 15 or 4)
-        screen.rect(8 + off_x, 8, util.linlin(0, 1, 0, 49, voice[i].level), 15)
-        screen.fill()
-        if glb_level < 1 then
-          screen.level(2)
-          screen.move(util.linlin(0, 1, 9 + off_x, 57 + off_x, voice[i].level * glb_level), 8)
-          screen.line_rel(0, 15)
-          screen.stroke()
-        end
-      elseif parameter == "pan" then
-        screen.level(focus_page3 == 0 and 15 or 4)
-        screen.move(33 + off_x, 8)
-        screen.line_rel(0, 15)
-        screen.stroke()
-        if voice[i].pan > 0 then
-          screen.rect(32 + off_x, 8, util.linlin(0, 1, 0, 25, voice[i].pan), 15)
-          screen.fill()
-        elseif voice[i].pan < 0 then
-          screen.rect(32 + off_x, 8, -util.linlin(-1, 0, 24, 0, voice[i].pan), 15)
-          screen.fill()
-        end
-        if glb_pan < 1 and voice[i].pan ~= 0 then
-          screen.level(2)
-          screen.move(util.linlin(-1, 1, 9 + off_x, 57 + off_x, voice[i].pan * glb_pan), 8)
-          screen.line_rel(0, 15)
-          screen.stroke()
-        end
-      elseif parameter == "cutoff" then
-        screen.level(focus_page3 == 0 and 15 or 4)
-        screen.rect(8 + off_x, 8, util.explin(20, 18000, 0, 49, voice[i].fc), 15)
-        screen.fill()
-      elseif parameter == "filter_q" then
-        screen.level(focus_page3 == 0 and 15 or 4)
-        screen.rect(58 + off_x, 8, - util.linlin(0.01, 4, 0, 49, voice[i].fq), 15)
-        screen.fill()
-      end
-    end
-
-    -- draw levels voice 3 + 4
-    for i = 3, 4 do
-      local off_x = (i - 3) * 63
-      if parameter == "level" then
-        screen.level(focus_page3 == 1 and 15 or 4)
-        screen.rect(8 + off_x, 40, util.linlin(0, 1, 0, 49, voice[i].level), 15)
-        screen.fill()
-        if glb_level < 1 then
-          screen.level(2)
-          screen.move(util.linlin(0, 1, 9 + off_x, 57 + off_x, voice[i].level * glb_level), 40)
-          screen.line_rel(0, 15)
-          screen.stroke()
-        end
-      elseif parameter == "pan" then
-        screen.level(focus_page3 == 1 and 15 or 4)
-        screen.move(33 + off_x, 40)
-        screen.line_rel(0, 15)
-        screen.stroke()
-        if voice[i].pan > 0 then
-          screen.rect(32 + off_x, 40, util.linlin(0, 1, 0, 25, voice[i].pan), 15)
-          screen.fill()
-        elseif voice[i].pan < 0 then
-          screen.rect(32 + off_x, 40, -util.linlin(-1, 0, 24, 0, voice[i].pan), 15)
-          screen.fill()
-        end
-        if glb_pan < 1 and voice[i].pan ~= 0 then
-          screen.level(2)
-          screen.move(util.linlin(-1, 1, 9 + off_x, 57 + off_x, voice[i].pan * glb_pan), 40)
-          screen.line_rel(0, 15)
-          screen.stroke()
-        end
-      elseif parameter == "cutoff" then
-        screen.level(focus_page3 == 1 and 15 or 4)
-        screen.rect(8 + off_x, 40, util.explin(20, 18000, 0, 49, voice[i].fc), 15)
-        screen.fill()
-      elseif parameter == "filter_q" then
-        screen.level(focus_page3 == 1 and 15 or 4)
-        screen.rect(58 + off_x, 40, - util.linlin(0.01, 4, 0, 49, voice[i].fq), 15)
-        screen.fill()
-      end
-    end
-  elseif pageNum == 4 then
-    -- a/d
-    screen.level(focus_page4 == 0 and 15 or 4)
-    screen.font_size(16)
-    screen.move(25, 30)
-    screen.text_center("A")
-    screen.move(50, 30)
-    screen.text_center("D")
-    screen.font_size(8)
-    screen.move(25, 46)
-    screen.text_center(params:string("adsr_attack"))
-    screen.move(50, 46)
-    screen.text_center(params:string("adsr_decay"))
-    -- s/r
-    screen.level(focus_page4 == 1 and 15 or 4)
-    screen.font_size(16)
-    screen.move(75, 30)
-    screen.text_center("S")
-    screen.move(100, 30)
-    screen.text_center("R")
-    screen.font_size(8)
-    screen.move(75, 46)
-    screen.text_center(params:string("adsr_sustain"))
-    screen.move(100, 46)
-    screen.text_center(params:string("adsr_release"))
-  end
-  screen.update()
+  _draw.screen()
 end
+
 
 -------- arc UI --------
 function a.delta(n, d)
-  if pageNum < 3 then
-    -- enc 1: varispeed
-    if n == 1 then
-      if shift then
-        arc_enc1_count = (arc_enc1_count + 1) % 25
-        if arc_enc1_count == 0 then
-          local idx = util.clamp(get_snap(d), 1, #scale[params:get("scale")])
-          local rate = scale[params:get("scale")][idx]
-          params:set("varispeed", rate)
-        end
-      else
-        params:delta("varispeed", d / arc_vs_sens)
-      end
-    -- enc 2: slide
-    elseif n == 2 then
-      if shift then
-        local add = d / 500
-        for i = 1, GENE_NUM do
-          local curr_pos = voice[i].pos_abs
-          local new_pos = curr_pos + add
-          softcut.position(i, new_pos)
-        end
-      else
-        params:delta("slide", d / 20)
-      end
-    -- enc 3: size
-    elseif n == 3 then
-      params:delta("gene_size", d / 20)
-    -- enc 4: morph
-    elseif n == 4 then
-      params:delta("morph", d / 20)
-    end
-  elseif pageNum == 3 then
-    if shift then
-      local glb_param = options.params_gbl[param_page3 + 1]
-      params:delta(glb_param, d / 20)
-    else
-      local parameter = options.params[param_page3 + 1]
-      params:delta(parameter..n, d / 20)
-    end
-  elseif pageNum == 4 then
-    if n == 1 then
-      params:delta("adsr_attack", d / 20)
-    elseif n == 2 then
-      params:delta("adsr_decay", d / 20)
-    elseif n == 3 then
-      params:delta("adsr_sustain", d / 20)
-    elseif n == 4 then
-      params:delta("adsr_release", d / 20)
-    end
-    page_redraw(4)
-  end
+  _arc.delta(n, d)
 end
 
 function arcredraw()
-  a:all(0)
-  if pageNum < 3 then
-    -- draw varispeed
-    local rate_pos = math.floor(params:get("varispeed") * 5.25 + 1)
-    local shft = voice_rate > 0 and 1 or -21
-    if voice_rate ~= 0 then
-      for i = 1, 21 do
-        a:led(1, i + shft - arc_off, 2)
-      end
-    end
-    for i = 2, #scale[params:get("scale")] - 1 do
-      local rate_step = math.floor((scale[params:get("scale")][i]) * 5.25 + 1)
-      if rate_step > 0 then
-        a:led(1, rate_step + 1 - arc_off, 6)
-      else
-        a:led(1, rate_step - arc_off, 6)
-      end
-    end
-    if voice_rate > 0 then
-      a:led(1, rate_pos + 1 - arc_off, 15)
-    elseif voice_rate <= 0 then
-      a:led(1, rate_pos - arc_off, 15)
-    end
-    a:led(1, 22 - arc_off, 6)
-    a:led(1, -20 - arc_off, 6)
-    -- draw slide
-    local gene_4_pos = math.floor(voice[4].pos_rel * 58 + 1) - 29
-    a:led(2, gene_4_pos - arc_off, 2)
-    local gene_3_pos = math.floor(voice[3].pos_rel * 58 + 1) - 29
-    a:led(2, gene_3_pos - arc_off, 4)
-    local gene_2_pos = math.floor(voice[2].pos_rel * 58 + 1) - 29
-    a:led(2, gene_2_pos - arc_off, 6)
-    local gene_1_pos = math.floor(voice[1].pos_rel * 58 + 1) - 29
-    a:led(2, gene_1_pos - arc_off, 8)
-    a:led(2, -28 - arc_off, 6)
-    a:led(2, 30 - arc_off, 6)
-    local slideview = math.floor(params:get("slide") * 58 + 1) - 29
-    a:led(2, slideview - arc_off, 15)
-    -- gene size
-    local startpoint = math.floor(params:get("gene_size") * -28)
-    local endpoint = math.ceil(params:get("gene_size") * 28)
-    for i = startpoint, endpoint do
-      a:led(3, i + 1 - arc_off, 10)
-    end
-    a:led(3, -28 - arc_off, 6)
-    a:led(3, 30 - arc_off, 6)
-    -- morph
-    local m_view_raw = math.ceil(params:get("morph") * 58 + 1)
-    local m_view = util.clamp(m_view_raw, 1, 45) - 29
-    local intensity = 3
-    if m_view >= -10 and m_view <= 6 then
-      intensity = 6
-    elseif m_view > 6 and m_view <= 15 then
-      intensity = 8
-    elseif m_view > 15 then
-      intensity = 11
-    end
-    for i = 1, m_view + 29 do
-      a:led(4, i - 29 - arc_off, intensity)
-    end
-    a:led(4, 18 - arc_off, m_view_raw < 44 and 0 or m_view_raw - 44)
-    a:led(4, 21 - arc_off, m_view_raw < 47 and 0 or m_view_raw - 44)
-    a:led(4, 24 - arc_off, m_view_raw < 51 and 0 or m_view_raw - 44)
-    a:led(4, 27 - arc_off, m_view_raw < 54 and 0 or m_view_raw - 44)
-    a:led(4, -28 - arc_off, 6)
-    a:led(4, 30 - arc_off, 6)
-    a:led(4, m_view - arc_off, 15)
-  elseif pageNum == 3 then
-    local parameter = options.params[param_page3 + 1]
-    for i = 1, 4 do
-      if parameter == "level" then
-        local arc_vol = math.floor(params:get("level"..i) * 58) - 28
-        for j = 1, arc_vol + 28 do
-          a:led(i, j - 28 - arc_off, 3)
-        end
-        a:led(i, -28 - arc_off, 6)
-        a:led(i, 30 - arc_off, 6)
-        a:led(i, arc_vol - arc_off, 15)
-      elseif parameter == "pan" then
-        local arc_pan = math.floor(params:get("pan"..i) * 24)
-        if arc_pan > 0 then
-          for j = 2, arc_pan do
-            a:led(i, j - arc_off, 4)
-          end
-        elseif arc_pan < 0 then
-          for j = arc_pan + 2, 0 do
-            a:led(i, j - arc_off, 4)
-          end
-        end        
-        a:led (i, 1 - arc_off, 10)
-        a:led (i, 25 - arc_off, 6)
-        a:led (i, -23 - arc_off, 6)
-        a:led (i, arc_pan + 1 - arc_off, 15)
-      elseif parameter == "cutoff" then
-        local arc_cut = math.floor(util.explin(20, 18000, 0, 1, params:get("cutoff"..i)) * 48) + 41
-        a:led (i, 25 - arc_off, 6)
-        a:led (i, -23 - arc_off, 6)
-        for j = -22, 24 do
-          if j < arc_cut - 64 then
-            a:led(i, j - arc_off, 3)
-          end
-        end
-        a:led(i, arc_cut - arc_off, 15)        
-      else
-        arc_q = math.floor(util.explin(0.1, 4, 0, 1, params:get("filter_q"..i)) * 32) + 17
-        for j = 17, 49 do
-          if j > arc_q then
-            a:led(i, j - arc_off, 3)
-          end
-        end
-        a:led(i, 17 - arc_off, 6)
-        a:led(i, 49 - arc_off, 6)
-        a:led(i, 42 - arc_off, 6)
-        a:led(i, 36 - arc_off, 6)
-        a:led(i, arc_q - arc_off, 15)        
-      end
-    end
-  elseif pageNum == 4 then
-      -- draw adsr attack
-    local attack = math.floor(util.linlin(0.1, 10, 0, 1, params:get("adsr_attack")) * 48) + 41
-    a:led (1, 25 - arc_off, 5)
-    a:led (1, -23 - arc_off, 5)
-    for i = -22, 24 do
-      if i < attack - 64 then
-        a:led(1, i - arc_off, 3)
-      end
-    end
-    a:led(1, attack - arc_off, 15)
-    -- draw adsr decay
-    local decay = math.floor(util.linlin(0.1, 10, 0, 1, params:get("adsr_decay")) * 48) + 41
-    a:led (2, 25 - arc_off, 5)
-    a:led (2, -23 - arc_off, 5)
-    for i = -22, 24 do
-      if i < decay - 64 then
-        a:led(2, i - arc_off, 3)
-      end
-    end
-    a:led(2, decay - arc_off, 15)
-    -- draw adsr sustain
-    local sustain = math.floor(params:get("adsr_sustain") * 48) + 41
-    a:led (3, 25 - arc_off, 5)
-    a:led (3, -23 - arc_off, 5)
-    for i = -22, 24 do
-      if i < sustain - 64 then
-        a:led(3, i - arc_off, 3)
-      end
-    end
-    a:led(3, sustain - arc_off, 15)
-    -- draw adsr release
-    local release = math.floor(util.linlin(0.1, 10, 0, 1, params:get("adsr_release")) * 48) + 41
-    a:led (4, 25 - arc_off, 5)
-    a:led (4, -23 - arc_off, 5)
-    for i = -22, 24 do
-      if i < release - 64 then
-        a:led(4, i - arc_off, 3)
-      end
-    end
-    a:led(4, release - arc_off, 15)
-  end
-  a:refresh()
+  _arc.draw()
 end
 
 
 -------- grid UI --------
 function g.key(x, y, z)
-  if y == 7 then
-    if x == 1 then
-      g_slotinit = z == 1 and true or false
-    elseif x == 8 then
-      g_slotmod = z == 1 and true or false
-    end
-  end
-  if y == 8 then
-    if x == 3 then
-      g_pos_reset = z == 1 and true or false
-    elseif x == 4 then
-      g_rec_dest = z == 1 and true or false
-      dirtyscreen = true
-    elseif x == 5 then
-      g_rec_speed = z == 1 and true or false
-      dirtyscreen = true
-    elseif x == 6 and not (g_rec_speed or g_rec_dest) then
-      g_rec_mode = z == 1 and true or false
-    end
-  end
-  -- left quardrant
-  if x < 9 then
-    if z == 1 then
-      if y < 4 then
-        local i = x + (y - 1) * 8
-        if i <= #splice then
-          local inc = i - active_splice
-          set_active_splice(inc)
-        else
-          if play then add_splice() end
-        end
-        dirtyscreen = true
-      elseif y == 4 then
-        if x == 2 then
-          params:set("varispeed", 0)
-        elseif x > 2 and x < 8 then
-          local rate = scale[1][x + 3]
-          params:set("varispeed", rate)
-        end
-      elseif y == 5 then
-        if x == 7 then
-          params:set("varispeed", 0)
-        elseif x > 1 and x < 7 then
-          local rate = scale[1][x - 1]
-          params:set("varispeed", rate)
-        end
-      elseif (y == 6 or y == 7) then
-        local i = x - 2 + (y - 6) * 4
-        if x == 1 then
-          init_param_state()
-        elseif x > 2 and x < 7 then
-          if g_slotmod then
-            clear_param_state(i)
-          else
-            if state_slot[i].has_data then
-              load_param_state(i)
-            else
-              save_param_state(i)
-            end
-          end
-        end
-      elseif y == 8 then
-        if x < 3 then
-          set_play()
-        elseif x == 3 then
-          set_start_pos()
-        elseif x == 6 and not g_rec_mode then
-          if g_rec_dest then
-            params:set("rec_dest", 1)
-          elseif g_rec_speed then
-            params:set("rec_rate", 1)
-          end
-        elseif x == 7 then
-          if g_rec_dest then
-            params:set("rec_dest", 2)
-          elseif g_rec_mode then
-            params:set("rec_mode", 1)
-          elseif g_rec_speed then
-            params:set("rec_rate", 2)
-          else
-            if rec_at_threshold then
-              amp_in[1]:stop()
-              amp_in[2]:stop()
-              rec_at_threshold = false
-            else
-              amp_in[1]:start()
-              amp_in[2]:start()
-              rec_at_threshold = true
-            end
-          end
-        elseif x == 8 then
-          if g_rec_dest then
-            params:set("rec_dest", 3)
-          elseif g_rec_mode then
-            params:set("rec_mode", 2)
-          elseif g_rec_speed then
-            params:set("rec_rate", 3)
-          else
-            toggle_recording()
-          end
-        end
-        dirtyscreen = true
-      end
-    elseif z == 0 then
-      if y == 8 then
-        if x == 2 then
-          set_play()
-        end
-      end
-    end
-  -- right quadrant
-  else
-    if y < 7 then
-      local note = (key_root + x) + g_interval * (6 - y)
-      local semitone = math.pow(2, note / 12)
-      g_key[x][y].state = z == 1 and true or false
-      if z == 1 then
-        if params:get("keys_mode") == 1 then
-          for i = 1, GENE_NUM do
-            voice[i].trsp_value = semitone
-            if params:get("adsr_active") == 2 then env_gate_on(i) end
-          end
-          set_rate()
-        else
-          for i, v in ipairs(voicetab) do
-            if v == 0 then
-              g_key[x][y].voice = i
-              voicetab[i] = 1
-              voice[i].trsp_value = semitone
-              for vox = 1, GENE_NUM do
-                if voicetab[vox] == 0 then
-                  voice[vox].trsp_value = semitone
-                end
-              end
-              set_rate()
-              if params:get("adsr_active") == 2 then env_gate_on(i) end
-              return
-            end
-          end
-        end
-      else
-        if params:get("keys_mode") == 1 then
-          for i = 1, GENE_NUM do
-            if params:get("adsr_active") == 2 then env_gate_off(i) end
-          end
-        else
-          voicetab[g_key[x][y].voice] = 0
-          for i, v in ipairs(voicetab) do
-            if v == 0 then
-              if params:get("adsr_active") == 2 then env_gate_off(i) end
-            end
-          end
-        end
-      end
-    elseif y == 8 then
-      if x == 14 then g_set_env = z == 1 and true or false end
-      if x > 10 and x < 15 and z == 1 then
-        pageNum = x - 10
-        dirtyscreen = true
-      elseif x == 16 and z == 1 then
-        if g_set_env then
-          params:set("adsr_active", params:get("adsr_active") == 1 and 2 or 1)
-        else
-          params:set("keys_mode", params:get("keys_mode") == 1 and 2 or 1)
-        end
-      end
-    end
-  end
-  dirtygrid = true
+  _grd.key_one(x, y, z)
 end
 
 function gridredraw()
-  g:all(0)
-  -- splices
-  for i = 1, 8 do
-    for j = 1, 4 do
-      g:led(i, j, 1)
-    end
-  end
-  for i = 1, #splice do
-    if i < 9 then
-      g:led(i, 1, i == active_splice and 12 or 6)
-    elseif i < 17 then
-      g:led(i - 8, 2, i == active_splice and 12 or 5)
-    elseif i < 25 then
-      g:led(i - 16, 3, i == active_splice and 12 or 4)
-    end
-  end
-  -- speed
-  for i = 1, 6 do
-    g:led(i + 1, 4, i * 2)
-    g:led(i + 1, 5, 14 - i * 2)
-  end
-  g:led(1, 7, g_slotinit and 15 or 4)
-  g:led(8, 7, g_slotmod and 15 or 4)
-  for i = 1, 4 do
-    g:led(i + 2, 6, state_slot[i].has_data and 4 or 2)
-    g:led(i + 2, 7, state_slot[i + 4].has_data and 4 or 2)
-  end
-  -- playback & recording
-  g:led(1, 8, play and 12 or 6)
-  g:led(2, 8, play and 8 or 4)
-  g:led(3, 8, g_pos_reset and 15 or 2)
-  g:led(4, 8 , g_rec_dest and 10 or 0)
-  g:led(5, 8 , g_rec_speed and 10 or 0)
-  g:led(6, 8 , g_rec_mode and 10 or 0)
-  if g_rec_dest then
-    for i = 1, 3 do
-      g:led(i + 5, 8, params:get("rec_dest") == i and 8 or 4)
-    end
-  elseif g_rec_speed then
-    for i = 1, 3 do
-      g:led(i + 5, 8, params:get("rec_rate") == i and 8 or 4)
-    end
-  elseif g_rec_mode then
-    for i = 1, 2 do
-      g:led(i + 6, 8, params:get("rec_mode") == i and 8 or 4)
-    end
-  else
-    g:led(7, 8 , rec_at_threshold and 8 or 4)
-    g:led(8, 8 , recording and 15 or 6)
-  end
-  -- right quadrant
-  for x = 9, 16 do
-    for y = 1, 6 do
-      local note = (-21 + x) + g_interval * (6 - y)
-      local semitone = note % 12
-      if semitone == 0 then
-        g:led(x, y, 12)
-      elseif (semitone == 2 or semitone == 4 or semitone == 5 or semitone == 7 or semitone == 9 or semitone == 11) then -- white keys
-        g:led(x, y, 6)
-      else
-        g:led(x, y, 2) -- black keys
-      end
-    end
-  end
-  for i = 1, 4 do
-    g:led(10 + i, 8, pageNum == i and 14 or 6)
-  end
-  if g_set_env then
-    g:led(16, 8, params:get("adsr_active") == 2 and 15 or 8)
-  else
-    g:led(16, 8, params:get("keys_mode") == 2 and 4 or 2)
-  end
-  g:refresh()
+  _grd.draw_one()
 end
 
 
@@ -2984,7 +2160,9 @@ function hardware_redraw()
 end
 
 function screen_redraw()
-  if dirtyscreen then
+  if pageNum == 1 then
+    redraw()
+  elseif dirtyscreen then
     redraw()
     dirtyscreen = false
   end
@@ -3006,6 +2184,34 @@ function page_redraw(num)
   end
 end
 
+function display_msg(param, name)
+  view_param = ""
+  view_name = ""
+  if g_lfo_depth then
+    view_name = "lfo depth"
+  elseif g_lfo_rate then
+    view_name = "lfo rate"
+  elseif g_lfo_shape then
+    view_name = "lfo shape"
+  elseif g_lfo_state then
+    view_name = "lfo state"
+  end
+  view_param = name
+  if msg_timer ~= nil then
+    clock.cancel(msg_timer)
+  end
+  local message = params:string(param)
+  msg_timer = clock.run(show_message, message)
+end
+
+function show_message(message)
+  view_message = message
+  dirtyscreen = true
+  clock.sleep(1)
+  view_message = ""
+  dirtyscreen = true
+end
+
 function build_menu()
   if arc_is then
     params:show("arc_params")
@@ -3017,6 +2223,15 @@ function build_menu()
   else
     params:hide("crow_params")
   end
+  if g_scale_active then
+    params:show("keys_scale")
+    params:show("grid_interval_scale")
+    params:hide("grid_interval_chrom")
+  else
+    params:hide("keys_scale")
+    params:show("grid_interval_chrom")
+    params:hide("grid_interval_scale")
+  end
   _menu.rebuild_params()
   dirtyscreen = true
 end
@@ -3024,7 +2239,6 @@ end
 function drawarc_connect()
   hardware_redraw()
   arc_is = true
-  hardwareredrawtimer:start()
   build_menu()
 end
 
@@ -3048,10 +2262,5 @@ function r()
 end
 
 function cleanup()
-  arc.add = function() end
-  arc.remove = function() end
-  midi.add = function() end
-  midi.remove = function() end
-  norns.crow.add = function() end
-  norns.crow.remove = function() end
+  print("all nice and tidy here")
 end
