@@ -25,13 +25,13 @@ m = midi.connect()
 
 tx = require 'textentry'
 mu = require 'musicutil'
-_lfos = require 'lfo'
+--_lfos = require 'lfo'
 
 _arc = include 'lib/concrete_arc'
 _key = include 'lib/concrete_key'
 _enc = include 'lib/concrete_enc'
 _draw = include 'lib/concrete_draw'
---_lfos = include 'lib/concrete_lfo'
+_lfos = include 'lib/concrete_lfo'
 _grd = include 'lib/concrete_grid'
 
 -------- variables --------
