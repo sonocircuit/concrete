@@ -70,7 +70,7 @@
         display_msg("lfo_clocked_"..param[i].."_lfo", name[i])
       else
         params:delta("lfo_free_"..param[i].."_lfo", d)
-        display_msg("lfo_clocked_"..param[i].."_lfo", name[i])
+        display_msg("lfo_free_"..param[i].."_lfo", name[i])
       end
     elseif g_lfo_shape then
       params:delta("lfo_shape_"..param[i].."_lfo", d)
