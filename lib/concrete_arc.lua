@@ -44,7 +44,7 @@ function arcenc.delta(n, d)
             display_msg("lfo_clocked_"..param[n].."_lfo", name[n])
           else
             params:delta("lfo_free_"..param[n].."_lfo", delta)
-            display_msg("lfo_clocked_"..param[n].."_lfo", name[n])
+            display_msg("lfo_free_"..param[n].."_lfo", name[n])
           end
         end
       elseif g_lfo_shape then
