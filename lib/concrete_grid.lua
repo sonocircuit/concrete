@@ -258,7 +258,7 @@ function grd.draw_one()
     end
   else
     g:led(7, 8 , rec_at_threshold and 8 or 4)
-    g:led(8, 8 , recording and 15 or 6)
+    g:led(8, 8 , rec and 15 or 6)
   end
   -- right quadrant
   for x = 9, 16 do
