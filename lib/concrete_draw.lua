@@ -125,7 +125,6 @@ function draw.screen()
     end
 
     -- rec key
-    --screen.level(focus_page1 == 1 and 15 or 4)
     screen.level(rec_at_threshold and 6 or (focus_page1 == 1 and 15 or 4))
     if rec or rec_at_threshold then
       screen.rect(3, 30, 17, 13)
