@@ -50,7 +50,7 @@ end
 -- @param function action A callback function to perform as the LFO advances. This library passes both the scaled and the raw value to the callback function.
 -- @param number phase The phase shift amount for this LFO (range: 0.0 to 1.0,; default: 0)
 -- @param string baseline From where the LFO should start (options: 'min', 'center', 'max'; default: 'min')
--- @param function state_callback A callback function that returns a bool that represents the enabled state of the lfo.
+-- @param function state_callback A callback function that returns the state of the lfo.
 function LFO.new(shape, min, max, depth, mode, period, action, phase, baseline, state_callback)  
   local i = {}
   setmetatable(i, LFO)
@@ -81,12 +81,13 @@ function LFO.new(shape, min, max, depth, mode, period, action, phase, baseline, 
     formatter = nil
   }
   i.action = action == nil and (function(scaled, raw) end) or action
-  i.state_callback = state_callback == nil and (function(enabled) end) or state_callback
+  i.state_callback = state_callback == nil and (function(is_enabled) end) or state_callback
   i.percentage = math.abs(i.min-i.max) * i.depth
   i.scaled_min = i.min
   i.scaled_max = i.max
   i.mid = 0
   i.rand_value = 0
+  i.prev_value = nil
   i.phase = phase == nil and 0 or phase
   scale_lfo(i)
   return i
@@ -440,8 +441,8 @@ function LFO:add_params(id,sep,group)
 
       params:add_option("lfo_"..id, "lfo state", {"off","on"}, self:get('enabled')+1)
       params:set_action("lfo_"..id, function(x)
-        local enabled = x == 2 and true or false
-        self.state_callback(enabled)
+        local is_enabled = x == 2 and true or false
+        self.state_callback(is_enabled)
         if x == 1 then
           lfo_params_visibility("hide", id)
           params:set("lfo_scaled_"..id,"")
