@@ -132,15 +132,19 @@ dirtygrid = false
 -- variable for crow
 crow_smoothing = 0.02 
 crow_val_change = false
-crow_prev_val = {}
+crow_prev_value = {}
 crow_in_mode = {}
 crow_in_thresh = {}
 crow_in_done_action = {}
 for i = 1, 2 do
-  crow_prev_val[i] = 0
+  crow_prev_value[i] = 0
   crow_in_mode[i] = 1
   crow_in_thresh[i] = false
   crow_in_done_action[i] = false
+end
+crow_out_mode = {}
+for i = 1, 4 do
+  crow_out_mode[i] = 1
 end
 
 -- variables for warble
@@ -180,7 +184,7 @@ local oct2 = math.pow(2, 24/12) -- speed == 4
 options = {}
 options.scale = {"oct", "oct+p4", "oct+p5", "oct+p4+p5"}
 options.crow_input = {"none", "play [trig]", "play [gate]", "restart [trig]", "rec [trig]", "rec [gate]", "add splice [trig]", "next splice [trig]", "prev splice [trig]", "random splice [trig]", "select splice [cv]", "varispeed v/8 [cv]", "slide [cv]", "size [cv]", "morph [cv]"}
-options.crow_output = {"none", "gene ramp [cv]", "loop reset [trig]"}
+options.crow_output = {"none", "ramp [cv]", "loop reset [trig]"}
 options.clock_tempo = {"2", "1", "1/2", "1/4", "3/16", "1/6", "1/8", "3/32", "1/12", "1/16","1/32"}
 options.clock_value = {2, 1, 1/2, 1/4, 3/16, 1/6, 1/8, 3/32, 1/12, 1/16, 1/32}
 options.params_gbl = {"global_level", "global_pan", "global_cutoff_rel", "global_filter_q_rel"}
@@ -859,24 +863,22 @@ function reset_morph_params()
 end
 
 function set_start_pos()
+  pos_counter = 0
   for i = 1, GENE_NUM do
     softcut.position(i, voice[i].s)
   end
-  pos_counter = 0
   if params:get("rec_dest") == 1 then
     softcut.position(rec_voice, voice[1].s)
   end
-
   for i = 1, 4 do
-    if params:get("crow_out_"..i) == 2 then
+    if crow_out_mode[i] == 2 then
       crow.output[i].action = "{ to(0, 0), to(8, "..gene_length.."), to(0, 0, 'lin') }"
       crow.output[i]()
-    elseif params:get("crow_out_"..i) == 3 then
+    elseif crow_out_mode[i] == 3 then
       crow.output[i].action = "pulse(0.02, 8)"
       crow.output[i]()
     end
   end
-
   set_levels()
   --page_redraw(1)
 end
@@ -1391,10 +1393,10 @@ function crow_in_stream_2(v)
 end
 
 function crow_in_handle(v, i)
-  if (v > crow_prev_val[i] + crow_smoothing) or (v < crow_prev_val[i] - crow_smoothing) then
-    crow_prev_val[i] = v
+  if (v > crow_prev_value[i] + crow_smoothing) or (v < crow_prev_value[i] - crow_smoothing) then
+    crow_prev_value[i] = v
     crow_val_change = true
-    --print(i.." is at "..crow_prev_val[i])
+    --print(i.." is at "..crow_prev_value[i])
   else
     crow_val_change = false
   end
@@ -1402,9 +1404,9 @@ function crow_in_handle(v, i)
 
   if mode > 1 and mode < 11 then
     -- set theshold
-    if crow_prev_val[i] >= 4 and not crow_in_thresh[i] then
+    if crow_prev_value[i] >= 4 and not crow_in_thresh[i] then
       crow_in_thresh[i] = true
-    elseif crow_prev_val[i] < 4 and crow_in_thresh[i] then
+    elseif crow_prev_value[i] < 4 and crow_in_thresh[i] then
       crow_in_thresh[i] = false
     end
     -- make action
@@ -1449,31 +1451,31 @@ function crow_in_handle(v, i)
   elseif mode > 10 then
     if crow_val_change then
       if mode == 11 then -- select splice
-        local volt = util.clamp(crow_prev_val[i], 0, 5)
+        local volt = util.clamp(crow_prev_value[i], 0, 5)
         local val = util.round(util.linlin(0, 5, 0, 1, volt), 0.01)
         select_splice(val)
       elseif mode == 12 then -- varispeed
-        if crow_prev_val[i] > 0 then
-          local volt = util.clamp(crow_prev_val[i], 0, 5)
+        if crow_prev_value[i] > 0 then
+          local volt = util.clamp(crow_prev_value[i], 0, 5)
           local v8 = util.round(volt, 1/12) - 36/12
           local val = math.pow(2, v8)
           params:set("varispeed", val)
-        elseif crow_prev_val[i] < 0 then
-          local volt = -util.clamp(crow_prev_val[i], -5, 0)
+        elseif crow_prev_value[i] < 0 then
+          local volt = -util.clamp(crow_prev_value[i], -5, 0)
           local v8 = util.round(volt, 1/12) - 36/12
           local val = -math.pow(2, v8)
           params:set("varispeed", val)
         end
       elseif mode == 13 then -- slide
-        local volt = util.clamp(crow_prev_val[i], 0, 5)
+        local volt = util.clamp(crow_prev_value[i], 0, 5)
         local val = util.round(util.linlin(0, 5, 0, 1, volt), 0.01)
         params:set("slide", val)
       elseif mode == 14 then -- size
-        local volt = util.clamp(crow_prev_val[i], 0, 5)
+        local volt = util.clamp(crow_prev_value[i], 0, 5)
         local val = 1 - util.round(util.linlin(0, 5, 0, 1, volt), 0.01)
         params:set("gene_size", val)
       elseif mode == 15 then -- morph
-        local volt = util.clamp(crow_prev_val[i], 0, 5)
+        local volt = util.clamp(crow_prev_value[i], 0, 5)
         local val = util.round(util.linlin(0, 5, 0, 1, volt), 0.01)
         params:set("morph", val)
       end
@@ -1494,14 +1496,6 @@ function get_active_voices()
     end
   end
   return active_voices
-end
-
-function get_value_bipolar(lfo_id, param_id)
-  if lfo_id:get('depth') > 0 then
-    return params:lookup_param(param_id).controlspec:map(lfo_id:get('scaled')/2 + params:get_raw(param_id))
-  else
-    return params:lookup_param(param_id).controlspec:map(params:get_raw(param_id))
-  end
 end
 
 
@@ -1540,6 +1534,7 @@ function init()
 
   for i = 1, 4 do
     params:add_option("crow_out_"..i, "output "..i, options.crow_output, 1)
+    params:set_action("crow_out_"..i, function(mode) crow_out_mode[i] = mode end)
   end
 
   -- arc params
@@ -1741,6 +1736,9 @@ function init()
   params:add_binary("reset_pos", "> reset position", "trigger", 0)
   params:set_action("reset_pos", function() set_start_pos() end)
 
+  params:add_binary("init_essai_params", "> init state", "trigger", 0)
+  params:set_action("init_essai_params", function() init_param_state() end)
+
   params:add_option("tape_transport", "tape transport", {"new", "used", "old", "vintage", "broken"}, 1)
   params:set_action("tape_transport", function(mode) gbl_rate_slew = options.rate_slew[mode] set_rate_slew(mode) end)
 
@@ -1829,9 +1827,16 @@ function init()
   params:add_group("level_lfos", "level lfos", 15 * (GENE_NUM + 1))
   local level_lfo = {}
   for i = 1, GENE_NUM + 1 do
-    level_lfo[i] = _lfos:add{min = 0, max = 1}
+    level_lfo[i] = _lfos:add{min = 0, max = 1, baseline = 'max'}
     level_lfo[i]:add_params("level_lfo"..i, "playhead "..gene_id[i].." level")
     level_lfo[i]:set("action", function(scaled, raw) params:set("level"..i, scaled) end)
+    level_lfo[i]:set('state_callback', function(enabled)
+      if not enabled and level_lfo[i].prev_value ~= nil then
+        params:set("level"..i, level_lfo[i].prev_value)
+      elseif enabled then
+        level_lfo[i].prev_value = params:get("level"..i)
+      end
+    end)
   end
 
   params:add_group("pan_lfos", "pan lfos", 15 * (GENE_NUM + 1))
@@ -1840,39 +1845,88 @@ function init()
     pan_lfo[i] = _lfos:add{min = -1, max = 1, baseline = 'center'}
     pan_lfo[i]:add_params("pan_lfo"..i, "playhead "..gene_id[i].." pan")
     pan_lfo[i]:set("action", function(scaled, raw) params:set("pan"..i, scaled) end)
+    pan_lfo[i]:set('state_callback', function(enabled)
+      if not enabled and pan_lfo[i].prev_value ~= nil then
+        params:set("pan"..i, pan_lfo[i].prev_value)
+      elseif enabled then
+        pan_lfo[i].prev_value = params:get("pan"..i)
+      end
+    end)
   end
 
   params:add_group("cutoff_lfos", "cutoff lfos", 15 * (GENE_NUM + 1))
   local cutoff_lfo = {}
   for i = 1, GENE_NUM + 1 do
-    cutoff_lfo[i] = _lfos:add{min = 20, max = 18000}
+    cutoff_lfo[i] = _lfos:add{min = 20, max = 18000, baseline = 'max'}
     cutoff_lfo[i]:add_params("cutoff_lfo"..i, "playhead "..gene_id[i].." cutoff")
     cutoff_lfo[i]:set("action", function(scaled, raw) params:set("cutoff"..i, scaled) end)
+    cutoff_lfo[i]:set('state_callback', function(enabled)
+      if not enabled and cutoff_lfo[i].prev_value ~= nil then
+        params:set("cutoff"..i, cutoff_lfo[i].prev_value)
+      elseif enabled then
+        cutoff_lfo[i].prev_value = params:get("cutoff"..i)
+      end
+    end)
   end
 
   params:add_group("filter_q_lfos", "filter q lfos", 15 * (GENE_NUM + 1))
   local filter_q_lfo = {}
   for i = 1, GENE_NUM + 1 do
-    filter_q_lfo[i] = _lfos:add{min = 0.01, max = 4}
+    filter_q_lfo[i] = _lfos:add{min = 0.01, max = 4, baseline = 'max'}
     filter_q_lfo[i]:add_params("filter_q_lfo"..i, "playhead "..gene_id[i].." filter q")
     filter_q_lfo[i]:set("action", function(scaled, raw) params:set("filter_q"..i, scaled) end)
+    filter_q_lfo[i]:set('state_callback', function(enabled)
+      if not enabled and filter_q_lfo[i].prev_value ~= nil then
+        params:set("filter_q"..i, filter_q_lfo[i].prev_value)
+      elseif enabled then
+        filter_q_lfo[i].prev_value = params:get("filter_q"..i)
+      end
+    end)
   end
 
   local varispeed_lfo = _lfos:add{min = -4, max = 4, baseline = 'center'}
   varispeed_lfo:add_params("varispeed_lfo", "varispeed", "varispeed lfo")
   varispeed_lfo:set("action", function(scaled, raw) params:set("varispeed", scaled) end)
+  varispeed_lfo:set('state_callback', function(enabled)
+    if not enabled and varispeed_lfo.prev_value ~= nil then
+      params:set("varispeed", varispeed_lfo.prev_value)
+    elseif enabled then
+      varispeed_lfo.prev_value = params:get("varispeed")
+    end
+  end)
 
-  local slide_lfo = _lfos:add{min = 0, max = 1}
+  local slide_lfo = _lfos:add{min = 0, max = 1, baseline = 'min'}
   slide_lfo:add_params("slide_lfo", "slide", "slide lfo")
   slide_lfo:set("action", function(scaled, raw) params:set("slide", scaled) end)
+  slide_lfo:set('state_callback', function(enabled)
+    if not enabled and slide_lfo.prev_value ~= nil then
+      params:set("slide", slide_lfo.prev_value)
+    elseif enabled then
+      slide_lfo.prev_value = params:get("slide")
+    end
+  end)
 
-  local gene_size_lfo = _lfos:add{min = 0, max = 1}
+  local gene_size_lfo = _lfos:add{min = 0, max = 1, baseline = 'max', mode = 'free'}
   gene_size_lfo:add_params("gene_size_lfo", "size", "size lfo")
   gene_size_lfo:set("action", function(scaled, raw) params:set("gene_size", scaled) end)
+  gene_size_lfo:set('state_callback', function(enabled)
+    if not enabled and gene_size_lfo.prev_value ~= nil then
+      params:set("gene_size", gene_size_lfo.prev_value)
+    elseif enabled then
+      gene_size_lfo.prev_value = params:get("gene_size")
+    end
+  end)
 
-  local morph_lfo = _lfos:add{min = 0, max = 1}
+  local morph_lfo = _lfos:add{min = 0, max = 1, baseline = 'min', mode = 'free'}
   morph_lfo:add_params("morph_lfo", "morph", "morph lfo")
   morph_lfo:set("action", function(scaled, raw) params:set("morph", scaled) end)
+  morph_lfo:set('state_callback', function(enabled)
+    if not enabled and morph_lfo.prev_value ~= nil then
+      params:set("morph", morph_lfo.prev_value)
+    elseif enabled then
+      morph_lfo.prev_value = params:get("morph")
+    end
+  end)
  
   -- init softcut settings
   for i = 1, GENE_NUM do -- genes 1 - 4
@@ -2067,6 +2121,7 @@ function init()
         set_levels()
         amp_in[ch]:stop()
         rec_at_threshold = false
+        dirtygrid = true
       end
     end
   end
@@ -2102,7 +2157,6 @@ function poll_positions(i, pos)
     if pos_counter >= util.round(gene_length, 0.01) * 100 then
       set_start_pos()
     end
-    --page_redraw(1)
   end
   -- ensure that recording stops when the rec head reaches the end of the reel.
   if i == rec_voice and is_recording and (params:get("rec_dest") == 3 or init_recording) then
@@ -2162,6 +2216,7 @@ end
 function screen_redraw()
   if pageNum == 1 then
     redraw()
+    dirtyscreen = false
   elseif dirtyscreen then
     redraw()
     dirtyscreen = false
