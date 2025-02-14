@@ -1,4 +1,4 @@
--- concrete v1.1.0 @sonocircuit
+-- concrete v1.1.1 @sonocircuit
 -- llllllll.co/t/concrete
 --
 --    virtual tape exploration
@@ -15,17 +15,12 @@
 --
 
 
------------------------------------------------------------------------------------------------------------------------------
--- TODO: add ji scales
------------------------------------------------------------------------------------------------------------------------------
-
 a = arc.connect()
 g = grid.connect()
 m = midi.connect()
 
 tx = require 'textentry'
 mu = require 'musicutil'
---_lfos = require 'lfo'
 
 _arc = include 'lib/concrete_arc'
 _key = include 'lib/concrete_key'
@@ -37,6 +32,9 @@ _grd = include 'lib/concrete_grid'
 -------- variables --------
 pset_load = false
 default_pset = 1
+
+grid_size = 128
+grid_quad = 1
 
 shift = false
 pageNum = 1
@@ -120,7 +118,6 @@ g_interval_chrom = 5
 g_interval_scale = 4
 g_voice = 0
 g_scale_active = false
-g_note_val = 0
 g_note_rate = 1
 g_set_env = false
 g_lfo_state = false
@@ -222,7 +219,7 @@ for i = 1, 6 do
 end
 
 g_key = {}
-for x = 9, 16 do
+for x = 1, 16 do
   g_key[x] = {}
   for y = 1, 6 do
     g_key[x][y] = {}
@@ -2070,11 +2067,14 @@ function init()
   softcut.event_phase(poll_positions)
   softcut.poll_start_phase()
 
+  -- establish grid size
+  if g.device then
+    grid_size = g.device.cols * g.device.rows
+  end
+
   -- detect if arc is connected
-  for v in pairs(arc.devices) do
-    if arc.devices[v].name ~= nil then
-      arc_is = true
-    end
+  if a.device then
+    arc_is = true
   end
 
   -- detect if crow is connected
@@ -2196,11 +2196,34 @@ end
 
 -------- grid UI --------
 function g.key(x, y, z)
-  _grd.key_one(x, y, z)
+  if grid_size == 64 then
+    if grid_quad == 1 then
+      _grd.key_one(x, y, z)
+    else
+      _grd.key_two(x, y, z, 0)
+    end
+  else
+    if x < 9 then
+      _grd.key_one(x, y, z)
+    else
+      _grd.key_two(x, y, z, 8)
+    end
+  end
 end
 
 function gridredraw()
-  _grd.draw_one()
+  g:all(0)
+  if grid_size == 64 then
+    if grid_quad == 1 then
+      _grd.draw_one()
+    else
+      _grd.draw_two(0)
+    end
+  else
+    _grd.draw_one()
+    _grd.draw_two(8)
+  end
+  g:refresh()
 end
 
 
