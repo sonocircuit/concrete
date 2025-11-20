@@ -15,7 +15,7 @@ load or record audio, cut it into splices, explore the sonic variations with fou
 * arc
 * crow
 
-**documentation:** [concrète user guide](https://github.com/sonocircuit/concrete/blob/main/doc/CONCRÈTE%20USER%20GUIDE%20v1.0.0.pdf)
+**documentation:** [concrète user guide](https://github.com/sonocircuit/concrete/blob/main/doc/CONCRETE_USER_GUIDE_v1.0.0.pdf)
 
 ----|--------|----|---------------|--|-----|--|----|------------|-|----------|----|---
 
