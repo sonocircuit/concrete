@@ -5,6 +5,10 @@ for i = 1, 4 do
   enc_count[i] = 0
 end
 
+function arcenc.key (n,z)
+    -- toggle shift on/off when key is pressed
+    shift = z == 1 and true or false
+end
 
 function arcenc.delta(n, d)
   if pageNum < 3 then

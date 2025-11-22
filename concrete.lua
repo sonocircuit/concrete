@@ -2189,6 +2189,10 @@ function a.delta(n, d)
   _arc.delta(n, d)
 end
 
+function a.key (n,z)
+    _arc.key(n,z)
+end
+
 function arcredraw()
   _arc.draw()
 end
