@@ -1,4 +1,4 @@
--- concrete v1.1.0 @sonocircuit
+-- concrete v1.1.1 @sonocircuit
 -- llllllll.co/t/concrete
 --
 --    virtual tape exploration
@@ -15,17 +15,12 @@
 --
 
 
------------------------------------------------------------------------------------------------------------------------------
--- TODO: add ji scales
------------------------------------------------------------------------------------------------------------------------------
-
 a = arc.connect()
 g = grid.connect()
 m = midi.connect()
 
 tx = require 'textentry'
 mu = require 'musicutil'
---_lfos = require 'lfo'
 
 _arc = include 'lib/concrete_arc'
 _key = include 'lib/concrete_key'
@@ -885,7 +880,7 @@ end
 
 function set_loops()
   -- calculate start, end and length
-  if params:get("morph_mode") == 1 then -- --TODO: testing required: you might run into trouble if pset loads into clocked mode as voice[1].s == 1
+  if params:get("morph_mode") == 1 then
     voice[1].s = util.clamp(splice[active_splice].s + splice[active_splice].l * params:get("slide"), splice[active_splice].s, splice[active_splice].e)
   end
   gene_length = util.clamp(splice[active_splice].l * params:get("gene_size"), 0.01, splice[active_splice].l)
@@ -1370,8 +1365,12 @@ function midi_events(data)
   end
 end
 
-function set_midi_event_callback() -- TODO! --> see steve's implem on llllllllll
-  midi.cleanup()
+function set_midi_event_callback()
+  for i = 1, 16 do
+    if midi.vports[i].event == midi_events then
+      midi.vports[i].event = nil
+    end
+  end
   m.event = midi_events
 end
 
